@@ -1,0 +1,35 @@
+name: Update V2Ray Configs
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'   # هر ۶ ساعت یک بار اجرا شود
+  workflow_dispatch:         # امکان اجرای دستی
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install telethon requests
+
+      - name: Run script
+        env:
+          API_ID: ${{ secrets.API_ID }}
+          API_HASH: ${{ secrets.API_HASH }}
+          SESSION_STRING: ${{ secrets.SESSION_STRING }}
+        run: python update_configs.py
+
+      - name: Commit and push if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add configs.txt
+          git diff --quiet && git diff --staged --quiet || (git commit -m "🔄 Auto-update V2Ray configs" && git push)
