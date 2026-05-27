@@ -11,7 +11,7 @@ CHANNEL = "@SOSkeyNET"
 CONFIG_FILE = "configs.txt"
 DB_FILE = "tested_configs.db"
 TEST_URL = "http://www.gstatic.com/generate_204"
-TEST_TIMEOUT = 8                      # ثانیه
+TEST_TIMEOUT = 6                      # ثانیه
 MAX_TEST = 2000                        # حداکثر تعداد کانفیگی که تست می‌شود (در صورت نیاز افزایش دهید)
 BATCH_SIZE = 100                      # پس از هر BATCH_SIZE کانفیگ، فایل نهایی به‌روز می‌شود
 
