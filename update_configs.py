@@ -12,7 +12,7 @@ CONFIG_FILE = "configs.txt"
 DB_FILE = "tested_configs.db"  # پایگاه داده برای ذخیره کانفیگ‌های تست‌شده
 TEST_URL = "http://www.gstatic.com/generate_204"
 TEST_TIMEOUT = 8  # ثانیه
-
+MAX_TEST = 100                     # ⚡ حداکثر تعداد کانفیگی که تست می‌شود (برای تست اولیه)
 # ---------------- کلاینت تلگرام ----------------
 client = TelegramClient(StringSession(SESSION_STR), API_ID, API_HASH)
 
@@ -308,7 +308,10 @@ if __name__ == "__main__":
     if not raw:
         print("⚠️ هیچ کانفیگی پیدا نشد!")
         exit(1)
-
+    # محدود کردن تعداد کانفیگ‌ها برای تست سریع
+    if len(raw) > MAX_TEST:
+        print(f"⚠️ محدودیت تست: فقط {MAX_TEST} کانفیگ اول تست می‌شود (برای تست اولیه)\n")
+        raw = raw[:MAX_TEST]
     valid = test_all(raw)
 
     # ساخت Subscription (Base64)
