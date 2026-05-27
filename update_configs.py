@@ -9,15 +9,16 @@ API_HASH = os.environ["API_HASH"]
 SESSION_STR = os.environ["SESSION_STRING"]
 CHANNEL = "@SOSkeyNET"
 CONFIG_FILE = "configs.txt"
-DB_FILE = "tested_configs.db"  # پایگاه داده برای ذخیره کانفیگ‌های تست‌شده
+DB_FILE = "tested_configs.db"
 TEST_URL = "http://www.gstatic.com/generate_204"
-TEST_TIMEOUT = 8  # ثانیه
-MAX_TEST = 100                     # ⚡ حداکثر تعداد کانفیگی که تست می‌شود (برای تست اولیه)
+TEST_TIMEOUT = 8                      # ثانیه
+MAX_TEST = 100                        # حداکثر تعداد کانفیگی که تست می‌شود (در صورت نیاز افزایش دهید)
+BATCH_SIZE = 100                      # پس از هر BATCH_SIZE کانفیگ، فایل نهایی به‌روز می‌شود
+
 # ---------------- کلاینت تلگرام ----------------
 client = TelegramClient(StringSession(SESSION_STR), API_ID, API_HASH)
 
 def extract_configs():
-    """دریافت همه کانفیگ‌ها از کانال"""
     configs = set()
     with client:
         for msg in client.iter_messages(CHANNEL, limit=200):
@@ -29,7 +30,6 @@ def extract_configs():
 
 # ---------------- مدیریت پایگاه داده ----------------
 def init_db():
-    """ایجاد جدول در صورت عدم وجود"""
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS tested_configs
@@ -38,7 +38,6 @@ def init_db():
     conn.close()
 
 def is_config_tested(config_hash):
-    """بررسی اینکه آیا کانفیگ قبلاً تست شده است"""
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("SELECT real_delay FROM tested_configs WHERE config_hash=?", (config_hash,))
@@ -47,7 +46,6 @@ def is_config_tested(config_hash):
     return result is not None
 
 def save_tested_config(config_hash, real_delay):
-    """ذخیره کانفیگ تست‌شده در پایگاه داده"""
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("INSERT OR REPLACE INTO tested_configs VALUES (?, ?, ?)",
@@ -56,13 +54,43 @@ def save_tested_config(config_hash, real_delay):
     conn.close()
 
 def get_cached_configs():
-    """بازیابی کانفیگ‌های قبلاً تست‌شده و مرتب‌سازی بر اساس Real Delay"""
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("SELECT config_hash, real_delay FROM tested_configs ORDER BY real_delay ASC")
     results = c.fetchall()
     conn.close()
     return results
+
+# ---------------- ابزار git برای commit و push ----------------
+def setup_git():
+    subprocess.run(["git", "config", "user.name", "github-actions[bot]"], check=True)
+    subprocess.run(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"], check=True)
+
+def commit_and_push(valid_configs, new_count, total_valid):
+    """نوشتن فایل، commit و push کردن تغییرات"""
+    # ساختن محتوای Base64
+    content = "\n".join(valid_configs)
+    encoded = base64.b64encode(content.encode("utf-8")).decode("utf-8")
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        f.write(encoded)
+
+    # stage کردن فایل‌های تغییر یافته
+    subprocess.run(["git", "add", CONFIG_FILE, DB_FILE], check=True)
+
+    # اگر تغییری وجود نداشت، نیازی به commit نیست
+    result = subprocess.run(["git", "diff", "--cached", "--quiet"], capture_output=True)
+    if result.returncode == 0:
+        print("   ↳ بدون تغییر جدید، commit انجام نشد.")
+        return
+
+    # commit
+    commit_msg = f"🔄 Batch update: +{new_count} new configs (total valid: {total_valid})"
+    subprocess.run(["git", "commit", "-m", commit_msg], check=True)
+
+    # pull و push
+    subprocess.run(["git", "pull", "--rebase", "origin", "main"], check=True)
+    subprocess.run(["git", "push", "origin", "main"], check=True)
+    print(f"   ↳ تغییرات با موفقیت push شد ({total_valid} کانفیگ معتبر).")
 
 # ---------------- دانلود Xray-core ----------------
 def download_xray():
@@ -80,7 +108,6 @@ def download_xray():
 
 # ---------------- تبدیل لینک به Outbound Xray ----------------
 def parse_link_to_outbound(link):
-    """تبدیل لینک vless/vmess/trojan به outbound کانفیگ Xray"""
     try:
         if link.startswith("vmess://"):
             b64 = link[8:]
@@ -201,7 +228,6 @@ def parse_link_to_outbound(link):
         return None
 
 def test_single_config(xray_bin, link, timeout=TEST_TIMEOUT):
-    """تست واقعی با Xray-core و برگرداندن Real Delay (میلی‌ثانیه)"""
     outbound = parse_link_to_outbound(link)
     if not outbound:
         return False, 999999
@@ -232,7 +258,7 @@ def test_single_config(xray_bin, link, timeout=TEST_TIMEOUT):
         )
 
         if res.returncode == 0 and res.stdout.strip():
-            latency = float(res.stdout.strip()) * 1000  # ms
+            latency = float(res.stdout.strip()) * 1000
             if latency < timeout * 1000:
                 return True, latency
         return False, 999999
@@ -251,16 +277,16 @@ def test_single_config(xray_bin, link, timeout=TEST_TIMEOUT):
         except:
             pass
 
-def test_all(configs):
-    """تست کانفیگ‌های جدید و ادغام با نتایج قبلی"""
+def test_all_with_incremental_save(configs):
+    """تست کانفیگ‌ها و ذخیره‌سازی تدریجی پس از هر BATCH_SIZE"""
     print("📥 دانلود Xray-core...")
     xray_bin = download_xray()
     print("✅ Xray-core آماده شد.\n")
 
-    results = {}
+    results = {}           # نگهداری همه کانفیگ‌های معتبر (link -> delay)
+    new_in_batch = 0
+    total_processed = 0
     total = len(configs)
-    new_tested = 0
-    skipped = 0
 
     # بازیابی نتایج قبلی از پایگاه داده
     cached = get_cached_configs()
@@ -269,38 +295,43 @@ def test_all(configs):
     print(f"📊 {len(cached)} کانفیگ قبلاً تست شده و از پایگاه داده بازیابی شد.\n")
 
     for i, link in enumerate(configs, 1):
+        total_processed += 1
         short = link[:70] + ("..." if len(link) > 70 else "")
-        
-        # بررسی اینکه آیا کانفیگ قبلاً تست شده است
-        config_hash = link  # استفاده از خود لینک به عنوان شناسه یکتا
-        
-        if is_config_tested(config_hash):
+
+        if is_config_tested(link):
             print(f"[{i}/{total}] ⏭️ {short} → قبلاً تست شده، رد می‌شود")
-            skipped += 1
             continue
-        
+
         ok, delay = test_single_config(xray_bin, link)
-        
+
         if ok:
-            results[config_hash] = delay
-            save_tested_config(config_hash, delay)
-            new_tested += 1
+            results[link] = delay
+            save_tested_config(link, delay)
+            new_in_batch += 1
             print(f"[{i}/{total}] ✅ {short} → Real Delay: {delay:.0f}ms (جدید)")
         else:
             print(f"[{i}/{total}] ❌ {short} → ناموفق")
 
+        # بررسی پایان دسته (batch) یا پایان کل
+        if total_processed % BATCH_SIZE == 0 or i == total:
+            if new_in_batch > 0:
+                # مرتب‌سازی کل نتایج بر اساس Real Delay
+                sorted_links = [link for link, _ in sorted(results.items(), key=lambda x: x[1])]
+                total_valid = len(sorted_links)
+                print(f"\n📦 پایان دسته {total_processed}/{total} | +{new_in_batch} کانفیگ جدید معتبر (کل: {total_valid})")
+                commit_and_push(sorted_links, new_in_batch, total_valid)
+                new_in_batch = 0
+            else:
+                print(f"\n📦 پایان دسته {total_processed}/{total} | بدون کانفیگ جدید معتبر در این دسته")
+
     shutil.rmtree(os.path.dirname(xray_bin), ignore_errors=True)
-    
-    # مرتب‌سازی بر اساس Real Delay (کمترین)
-    sorted_results = sorted(results.items(), key=lambda x: x[1])
-    
-    print(f"\n📈 خلاصه: {len(sorted_results)} کانفیگ معتبر (⏭️ {skipped} قبلاً تست شده, ✅ {new_tested} جدید)")
-    return [link for link, _ in sorted_results]
+    print(f"\n🔚 تست تمام شد. مجموع کانفیگ‌های معتبر: {len(results)}")
+    return [link for link, _ in sorted(results.items(), key=lambda x: x[1])]
 
 if __name__ == "__main__":
-    # راه‌اندازی پایگاه داده
     init_db()
-    
+    setup_git()   # تنظیم هویت git
+
     print("📡 دریافت کانفیگ‌ها از تلگرام...")
     raw = extract_configs()
     print(f"📋 {len(raw)} کانفیگ پیدا شد.\n")
@@ -308,13 +339,15 @@ if __name__ == "__main__":
     if not raw:
         print("⚠️ هیچ کانفیگی پیدا نشد!")
         exit(1)
-    # محدود کردن تعداد کانفیگ‌ها برای تست سریع
-    if len(raw) > MAX_TEST:
-        print(f"⚠️ محدودیت تست: فقط {MAX_TEST} کانفیگ اول تست می‌شود (برای تست اولیه)\n")
-        raw = raw[:MAX_TEST]
-    valid = test_all(raw)
 
-    # ساخت Subscription (Base64)
+    # محدود کردن تعداد کانفیگ‌ها برای تست سریع (در صورت نیاز حذف یا افزایش دهید)
+    if len(raw) > MAX_TEST:
+        print(f"⚠️ محدودیت تست: فقط {MAX_TEST} کانفیگ اول تست می‌شود.\n")
+        raw = raw[:MAX_TEST]
+
+    valid = test_all_with_incremental_save(raw)
+
+    # ذخیره‌سازی نهایی برای اطمینان (ممکن است قبلاً توسط آخرین دسته انجام شده باشد)
     content = "\n".join(valid)
     encoded = base64.b64encode(content.encode("utf-8")).decode("utf-8")
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
