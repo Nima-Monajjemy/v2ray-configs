@@ -2,11 +2,12 @@ name: Update V2Ray Configs
 
 on:
   schedule:
-    - cron: '0 */6 * * *'   # هر ۶ ساعت یک بار اجرا شود
-  workflow_dispatch:         # امکان اجرای دستی
-# این بخش جدید را اضافه کن:
+    - cron: '0 */6 * * *'   # هر ۶ ساعت
+  workflow_dispatch:         # اجرای دستی
+
 permissions:
-  contents: write   # اجازه‌ی نوشتن (push) به محتوای مخزن
+  contents: write
+
 jobs:
   run:
     runs-on: ubuntu-latest
@@ -34,4 +35,4 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add configs.txt
-          git diff --quiet && git diff --staged --quiet || (git commit -m "🔄 Auto-update V2Ray configs" && git push)
+          git diff --quiet && git diff --staged --quiet || (git commit -m "🔄 Update configs with Real Delay test" && git push)
