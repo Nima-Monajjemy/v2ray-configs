@@ -4,7 +4,9 @@ on:
   schedule:
     - cron: '0 */6 * * *'   # هر ۶ ساعت یک بار اجرا شود
   workflow_dispatch:         # امکان اجرای دستی
-
+# این بخش جدید را اضافه کن:
+permissions:
+  contents: write   # اجازه‌ی نوشتن (push) به محتوای مخزن
 jobs:
   run:
     runs-on: ubuntu-latest
