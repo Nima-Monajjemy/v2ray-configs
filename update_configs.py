@@ -22,7 +22,7 @@ MAX_RETEST = 30
 MAX_FAILURES = 2
 
 # --------------- تنظیمات پالایش دوره‌ای ---------------
-PURGE_INTERVAL = 4   # هر چند اجرای عادی، یک پالایش کامل انجام شود
+PURGE_INTERVAL = 1   # هر چند اجرای عادی، یک پالایش کامل انجام شود
 
 # ---------------- کلاینت تلگرام ----------------
 client = TelegramClient(StringSession(SESSION_STR), API_ID, API_HASH)
