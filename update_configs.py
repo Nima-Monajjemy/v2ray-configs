@@ -14,13 +14,13 @@ CHANNELS = ["@SOSkeyNET", "@Mrshahabx", "@vslshi"]
 CONFIG_FILE = "configs.txt"
 DB_FILE = "tested_configs.db"
 TEST_URL = "http://www.gstatic.com/generate_204"
-TEST_TIMEOUT = 6                      # ثانیه
+TEST_TIMEOUT = 2                      # ثانیه
 MAX_TEST = 2000                       # حداکثر تعداد کانفیگی که تست می‌شود
 BATCH_SIZE = 100                      # پس از هر BATCH_SIZE کانفیگ، فایل نهایی به‌روز می‌شود
 
 # --------------- تنظیمات حذف کانفیگ‌های خراب ---------------
 EXPIRY_HOURS = 12
-MAX_RETEST = 20
+MAX_RETEST = 30
 MAX_FAILURES = 2
 
 # ---------------- کلاینت تلگرام ----------------
