@@ -7,12 +7,15 @@ from telethon.sessions import StringSession
 API_ID = int(os.environ["API_ID"])
 API_HASH = os.environ["API_HASH"]
 SESSION_STR = os.environ["SESSION_STRING"]
-CHANNEL = "@SOSkeyNET"
+
+# لیست کانال‌ها (همگی باید با @ شروع شوند)
+CHANNELS = ["@SOSkeyNET", "@Mrshahabx", "@vslshi"]
+
 CONFIG_FILE = "configs.txt"
 DB_FILE = "tested_configs.db"
 TEST_URL = "http://www.gstatic.com/generate_204"
-TEST_TIMEOUT = 3                      # ثانیه
-MAX_TEST = 2000                        # حداکثر تعداد کانفیگی که تست می‌شود
+TEST_TIMEOUT = 6                      # ثانیه
+MAX_TEST = 2000                       # حداکثر تعداد کانفیگی که تست می‌شود
 BATCH_SIZE = 100                      # پس از هر BATCH_SIZE کانفیگ، فایل نهایی به‌روز می‌شود
 
 # --------------- تنظیمات حذف کانفیگ‌های خراب ---------------
@@ -23,17 +26,74 @@ MAX_FAILURES = 2
 # ---------------- کلاینت تلگرام ----------------
 client = TelegramClient(StringSession(SESSION_STR), API_ID, API_HASH)
 
+# ---------------- مدیریت وضعیت دریافت پیام‌ها ----------------
+def init_fetch_state():
+    """ایجاد جدول fetch_state برای ذخیره آخرین msg_id خوانده‌شده برای هر کانال"""
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS fetch_state
+                 (channel TEXT PRIMARY KEY, last_msg_id INTEGER)''')
+    conn.commit()
+    conn.close()
+
+def get_last_msg_id(channel):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT last_msg_id FROM fetch_state WHERE channel=?", (channel,))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else 0
+
+def set_last_msg_id(channel, msg_id):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO fetch_state VALUES (?, ?)", (channel, msg_id))
+    conn.commit()
+    conn.close()
+
 def extract_configs():
+    """دریافت کانفیگ‌ها از تمام کانال‌ها با روش افزایشی (فقط پیام‌های جدید)"""
     configs = set()
     with client:
-        for msg in client.iter_messages(CHANNEL, limit=200):
-            if msg.text:
-                found = re.findall(r'(?:vless|vmess|trojan|ss)://\S+', msg.text)
-                for link in found:
-                    configs.add(link)
+        for channel in CHANNELS:
+            last_id = get_last_msg_id(channel)
+            new_messages = []
+            max_id = last_id  # در ابتدا همان آخرین شناسه
+
+            # دریافت پیام‌های جدیدتر از last_id (حداکثر ۲۰۰ پیام)
+            try:
+                messages = client.iter_messages(
+                    channel,
+                    limit=200,                 # حداکثر ۲۰۰ پیام جدید
+                    min_id=last_id + 1,        # فقط پیام‌هایی با id بزرگتر از last_id
+                    reverse=False              # از قدیمی به جدید (اختیاری، ولی برای محاسبه max_id راحت‌تر)
+                )
+                # حلقه روی messages (async generator درون sync context قابل استفاده است)
+                for msg in messages:
+                    new_messages.append(msg)
+                    if msg.id > max_id:
+                        max_id = msg.id
+            except Exception as e:
+                print(f"⚠️ خطا در دریافت پیام‌های کانال {channel}: {e}")
+                continue
+
+            if new_messages:
+                # به‌روزرسانی آخرین شناسه فقط در صورت دریافت پیام جدید
+                set_last_msg_id(channel, max_id)
+                print(f"📨 {channel}: {len(new_messages)} پیام جدید دریافت شد (آخرین ID: {max_id})")
+            else:
+                print(f"📨 {channel}: پیام جدیدی یافت نشد.")
+
+            # استخراج لینک‌ها از متن پیام‌های جدید
+            for msg in new_messages:
+                if msg.text:
+                    found = re.findall(r'(?:vless|vmess|trojan|ss)://\S+', msg.text)
+                    for link in found:
+                        configs.add(link)
+
     return list(configs)
 
-# ---------------- مدیریت پایگاه داده ----------------
+# ---------------- مدیریت پایگاه داده (تست‌شده‌ها) ----------------
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -141,7 +201,7 @@ def download_xray():
     os.chmod(xray_bin, 0o755)
     return xray_bin
 
-# ---------------- تبدیل لینک به Outbound Xray (نسخه کامل با ss و httpupgrade) ----------------
+# ---------------- تبدیل لینک به Outbound Xray (نسخه کامل) ----------------
 def parse_link_to_outbound(link):
     try:
         if link.startswith("vmess://"):
@@ -440,11 +500,12 @@ def test_all_with_incremental_save(configs):
 
 if __name__ == "__main__":
     init_db()
+    init_fetch_state()  # راه‌اندازی جدول fetch_state
     setup_git()
 
     print("📡 دریافت کانفیگ‌ها از تلگرام...")
     raw = extract_configs()
-    print(f"📋 {len(raw)} کانفیگ پیدا شد.\n")
+    print(f"📋 {len(raw)} کانفیگ یکتا از تمام کانال‌ها استخراج شد.\n")
 
     if not raw:
         print("⚠️ هیچ کانفیگی پیدا نشد!")
