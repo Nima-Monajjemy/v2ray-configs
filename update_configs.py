@@ -8,27 +8,27 @@ API_ID = int(os.environ["API_ID"])
 API_HASH = os.environ["API_HASH"]
 SESSION_STR = os.environ["SESSION_STRING"]
 
-# لیست کانال‌ها (همگی باید با @ شروع شوند)
 CHANNELS = ["@SOSkeyNET", "@Mrshahabx", "@vslshi"]
 
 CONFIG_FILE = "configs.txt"
 DB_FILE = "tested_configs.db"
 TEST_URL = "http://www.gstatic.com/generate_204"
-TEST_TIMEOUT = 2                      # ثانیه
-MAX_TEST = 2000                       # حداکثر تعداد کانفیگی که تست می‌شود
-BATCH_SIZE = 100                      # پس از هر BATCH_SIZE کانفیگ، فایل نهایی به‌روز می‌شود
+TEST_TIMEOUT = 2
+MAX_TEST = 2000
+BATCH_SIZE = 100
 
-# --------------- تنظیمات حذف کانفیگ‌های خراب ---------------
 EXPIRY_HOURS = 12
 MAX_RETEST = 30
 MAX_FAILURES = 2
+
+# --------------- تنظیمات پالایش دوره‌ای ---------------
+PURGE_INTERVAL = 4   # هر چند اجرای عادی، یک پالایش کامل انجام شود
 
 # ---------------- کلاینت تلگرام ----------------
 client = TelegramClient(StringSession(SESSION_STR), API_ID, API_HASH)
 
 # ---------------- مدیریت وضعیت دریافت پیام‌ها ----------------
 def init_fetch_state():
-    """ایجاد جدول fetch_state برای ذخیره آخرین msg_id خوانده‌شده برای هر کانال"""
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS fetch_state
@@ -52,23 +52,19 @@ def set_last_msg_id(channel, msg_id):
     conn.close()
 
 def extract_configs():
-    """دریافت کانفیگ‌ها از تمام کانال‌ها با روش افزایشی (فقط پیام‌های جدید)"""
     configs = set()
     with client:
         for channel in CHANNELS:
             last_id = get_last_msg_id(channel)
             new_messages = []
-            max_id = last_id  # در ابتدا همان آخرین شناسه
-
-            # دریافت پیام‌های جدیدتر از last_id (حداکثر ۲۰۰ پیام)
+            max_id = last_id
             try:
                 messages = client.iter_messages(
                     channel,
-                    limit=200,                 # حداکثر ۲۰۰ پیام جدید
-                    min_id=last_id + 1,        # فقط پیام‌هایی با id بزرگتر از last_id
-                    reverse=False              # از قدیمی به جدید (اختیاری، ولی برای محاسبه max_id راحت‌تر)
+                    limit=200,
+                    min_id=last_id + 1,
+                    reverse=False
                 )
-                # حلقه روی messages (async generator درون sync context قابل استفاده است)
                 for msg in messages:
                     new_messages.append(msg)
                     if msg.id > max_id:
@@ -76,22 +72,42 @@ def extract_configs():
             except Exception as e:
                 print(f"⚠️ خطا در دریافت پیام‌های کانال {channel}: {e}")
                 continue
-
             if new_messages:
-                # به‌روزرسانی آخرین شناسه فقط در صورت دریافت پیام جدید
                 set_last_msg_id(channel, max_id)
-                print(f"📨 {channel}: {len(new_messages)} پیام جدید دریافت شد (آخرین ID: {max_id})")
+                print(f"📨 {channel}: {len(new_messages)} پیام جدید (آخرین ID: {max_id})")
             else:
                 print(f"📨 {channel}: پیام جدیدی یافت نشد.")
-
-            # استخراج لینک‌ها از متن پیام‌های جدید
             for msg in new_messages:
                 if msg.text:
                     found = re.findall(r'(?:vless|vmess|trojan|ss)://\S+', msg.text)
                     for link in found:
                         configs.add(link)
-
     return list(configs)
+
+# ---------------- مدیریت شمارنده اجراها ----------------
+def init_run_counter():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS run_counter
+                 (id INTEGER PRIMARY KEY, counter INTEGER)''')
+    c.execute("INSERT OR IGNORE INTO run_counter (id, counter) VALUES (1, 0)")
+    conn.commit()
+    conn.close()
+
+def get_run_counter():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT counter FROM run_counter WHERE id=1")
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else 0
+
+def set_run_counter(value):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("UPDATE run_counter SET counter=? WHERE id=1", (value,))
+    conn.commit()
+    conn.close()
 
 # ---------------- مدیریت پایگاه داده (تست‌شده‌ها) ----------------
 def init_db():
@@ -246,10 +262,8 @@ def parse_link_to_outbound(link):
                         method, password = "aes-256-gcm", userinfo
             else:
                 return None
-
             address = parsed.hostname
             port = parsed.port
-
             outbound = {
                 "protocol": "shadowsocks",
                 "settings": {
@@ -498,17 +512,74 @@ def test_all_with_incremental_save(configs):
     print(f"\n🔚 تست تمام شد. مجموع کانفیگ‌های معتبر: {len(results)}")
     return [link for link, _ in sorted(results.items(), key=lambda x: x[1])]
 
+# ---------------- پالایش کامل کانفیگ‌های موجود ----------------
+def perform_purge():
+    print("🧹 شروع پالایش کامل کانفیگ‌های موجود...")
+    if not os.path.exists(CONFIG_FILE):
+        print("❌ فایل configs.txt یافت نشد!")
+        return
+
+    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+        encoded = f.read().strip()
+    if not encoded:
+        print("⚠️ فایل configs.txt خالی است. پالایش متوقف شد.")
+        set_run_counter(0)
+        return
+
+    try:
+        decoded = base64.b64decode(encoded).decode("utf-8")
+        links = [line.strip() for line in decoded.split("\n") if line.strip()]
+    except Exception as e:
+        print(f"❌ خطا در خواندن فایل configs.txt: {e}")
+        return
+
+    unique_links = list(set(links))
+    print(f"📋 {len(unique_links)} کانفیگ یکتا در فایل یافت شد.")
+
+    xray_bin = download_xray()
+    results = {}
+    removed = 0
+
+    for link in unique_links:
+        short = link[:70] + ("..." if len(link) > 70 else "")
+        ok, delay = test_single_config(xray_bin, link)
+        if ok:
+            results[link] = delay
+            save_tested_config(link, delay, fail_count=0)
+            print(f"✅ {short} → Real Delay: {delay:.0f}ms")
+        else:
+            delete_config(link)
+            removed += 1
+            print(f"❌ {short} → حذف شد")
+
+    sorted_links = [link for link, _ in sorted(results.items(), key=lambda x: x[1])]
+    total_valid = len(sorted_links)
+    print(f"\n🧹 پالایش پایان یافت. {total_valid} کانفیگ معتبر باقی ماندند (حذف: {removed})")
+    commit_and_push(sorted_links, 0, total_valid)
+    set_run_counter(0)  # ریست شمارنده اجراها
+
+    shutil.rmtree(os.path.dirname(xray_bin), ignore_errors=True)
+
 if __name__ == "__main__":
     init_db()
-    init_fetch_state()  # راه‌اندازی جدول fetch_state
+    init_fetch_state()
+    init_run_counter()
     setup_git()
 
+    counter = get_run_counter()
+    if counter >= PURGE_INTERVAL:
+        print(f"🔄 شمارنده اجرا: {counter} (آستانه: {PURGE_INTERVAL}) → اجرای پالایش")
+        perform_purge()
+        exit(0)
+
+    print(f"📊 شمارنده اجرا: {counter} / {PURGE_INTERVAL} → اجرای عادی")
     print("📡 دریافت کانفیگ‌ها از تلگرام...")
     raw = extract_configs()
     print(f"📋 {len(raw)} کانفیگ یکتا از تمام کانال‌ها استخراج شد.\n")
 
     if not raw:
         print("⚠️ هیچ کانفیگی پیدا نشد!")
+        set_run_counter(counter + 1)
         exit(1)
 
     if len(raw) > MAX_TEST:
@@ -522,4 +593,6 @@ if __name__ == "__main__":
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         f.write(encoded)
 
+    set_run_counter(counter + 1)
     print(f"\n🎉 تمام! {len(valid)} کانفیگ معتبر بر اساس Real Delay مرتب و در {CONFIG_FILE} ذخیره شد.")
+    print(f"🔢 شمارنده اجرا به‌روز شد: {counter + 1} / {PURGE_INTERVAL}")
