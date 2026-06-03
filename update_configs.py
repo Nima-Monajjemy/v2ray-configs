@@ -18,11 +18,11 @@ MAX_TEST = 2000
 BATCH_SIZE = 100
 
 EXPIRY_HOURS = 12
-MAX_RETEST = 30
+MAX_RETEST = 40
 MAX_FAILURES = 2
 
 # --------------- تنظیمات پالایش دوره‌ای ---------------
-PURGE_INTERVAL = 3   # هر چند اجرای عادی، یک پالایش کامل انجام شود
+PURGE_INTERVAL = 2   # هر چند اجرای عادی، یک پالایش کامل انجام شود
 
 # ---------------- کلاینت تلگرام ----------------
 client = TelegramClient(StringSession(SESSION_STR), API_ID, API_HASH)
