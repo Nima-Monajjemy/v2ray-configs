@@ -13,7 +13,7 @@ CHANNELS = ["@SOSkeyNET", "@Mrshahabx", "@vslshi"]
 CONFIG_FILE = "configs.txt"
 DB_FILE = "tested_configs.db"
 TEST_URL = "http://www.gstatic.com/generate_204"
-TEST_TIMEOUT = 1
+TEST_TIMEOUT = 0.5
 MAX_TEST = 2000
 BATCH_SIZE = 100
 
