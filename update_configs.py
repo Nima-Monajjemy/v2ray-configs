@@ -20,45 +20,59 @@ BATCH_SIZE = 100
 EXPIRY_HOURS = 12
 MAX_RETEST = 40
 MAX_FAILURES = 2
-
-# --------------- تنظیمات پالایش دوره‌ای ---------------
-PURGE_INTERVAL = 2   # هر چند اجرای عادی، یک پالایش کامل انجام شود
+PURGE_INTERVAL = 2
 
 # ---------------- کلاینت تلگرام ----------------
 client = TelegramClient(StringSession(SESSION_STR), API_ID, API_HASH)
 
-# ---------------- فیلتر هوشمند و منعطف برای اینترنت ایران ----------------
+# ---------------- فیلتر سخت‌گیرانه مبتنی بر رفتار DPI ----------------
+def is_invalid_sni(s):
+    if not s:
+        return False
+    s_lower = s.lower()
+    # 1. آیا SNI یک آی‌پی آدرس است؟ (تخلف از پروتکل TLS)
+    if re.match(r"^\d{1,3}(\.\d{1,3}){3}$", s_lower): 
+        return True
+    
+    # 2. لیست سیاه دامنه‌های مسدود یا حساسیت‌زا
+    bad_domains = [".workers.dev", ".pages.dev", ".ir", ".ccwu.cc", "fastly.net"]
+    if any(bd in s_lower for bd in bad_domains):
+        return True
+        
+    return False
+
 def is_iran_friendly_config(link):
     """
-    نسخه بهینه‌شده: فیلترها به گونه‌ای تنظیم شده‌اند که کانفیگ‌های آشکارا مسدود
-    (مثل vmess خام) را حذف کنند، اما به کانفیگ‌های دارای پتانسیل اتصال ارفاق کنند.
+    بررسی دقیق پارامترها پیش از تست برای حذف قطعی کانفیگ‌های محکوم به شکست
     """
     try:
-        # پورت‌های استاندارد وب و CDN ها (کلودفلر و ...)
         CF_PORTS = {80, 443, 2052, 2053, 2082, 2083, 2086, 2087, 8080, 8443, 8880, 2095, 2096}
-        
+        # لیست SNIهای سوخته برای Reality بر اساس لاگ‌های اپراتور
+        burned_reality_snis = {"yahoo.com", "www.yahoo.com", "microsoft.com", "www.microsoft.com", 
+                               "cloudflare.com", "www.cloudflare.com", "sony.com", "www.sony.com", 
+                               "apple.com", "www.apple.com"}
+
         if link.startswith("vmess://"):
             b64 = link[8:]
             padded = b64 + '=' * (4 - len(b64) % 4) if len(b64) % 4 != 0 else b64
             decoded = json.loads(base64.b64decode(padded).decode('utf-8'))
+            
+            port = int(decoded.get("port", 443))
             net = decoded.get("net", "tcp")
             tls = decoded.get("tls", "")
-            port = int(decoded.get("port", 443))
+            sni = decoded.get("sni", "")
+            host = decoded.get("host", "")
             
-            # Vmess خام (بدون TLS) روی TCP صد در صد مسدود است -> حذف
-            if net == "tcp" and tls != "tls": 
-                return False
-            # Vmess خام روی WS اگر روی پورت غیروب باشد -> حذف
-            if tls != "tls" and port not in CF_PORTS:
-                return False
+            if port == 443 and tls != "tls": return False # روی 443 فقط TLS مجاز است
+            if is_invalid_sni(sni) or is_invalid_sni(host): return False
             return True
             
         elif link.startswith("ss://"):
             parsed = urlparse(link)
             port = parsed.port if parsed.port else 443
-            # شدوساکس خام به دلیل نبود TLS، فقط در صورت استفاده از پورت‌های رایج وب شانس زنده ماندن دارد
-            if port not in [443, 80, 8080, 8443, 2053]: 
-                return False
+            # شدوساکس خام روی پورت 443 مسدود می‌شود
+            if port == 443: return False
+            if port not in [80, 8080, 8443, 2053]: return False
             return True
             
         elif link.startswith("vless://") or link.startswith("trojan://"):
@@ -70,64 +84,69 @@ def is_iran_friendly_config(link):
             net_type = params.get("type", ["tcp"])[0]
             fp = params.get("fp", [""])[0]
             pbk = params.get("pbk", [""])[0]
+            sni = params.get("sni", [""])[0]
+            host = params.get("host", [""])[0]
+            
+            if is_invalid_sni(sni) or is_invalid_sni(host): return False
+            if port == 443 and security not in ["tls", "reality"]: return False
             
             if security == "reality":
-                # پروتکل Reality بسیار قدرتمند است. اگر کلید عمومی (pbk) داشته باشد، روی هر پورتی قبولش می‌کنیم
                 if not pbk: return False
-                return True
+                if sni.lower() in burned_reality_snis: return False
                 
             elif security == "tls":
-                # در صورت نداشتن اثر انگشت (fp)، فقط اگر روی پورت‌های کلودفلر باشد به آن ارفاق می‌کنیم
-                if not fp and port not in CF_PORTS:
-                    return False
-                    
+                if not fp and port not in CF_PORTS: return False
+                
             elif security == "none" or not security:
-                # کانفیگ‌های بدون TLS (معمولا پشت کلودفلر) حتماً باید از بسترهای وب‌پایه استفاده کنند
-                if net_type not in ["ws", "xhttp", "grpc"]: 
-                    return False
-                # و حتماً باید روی پورت‌های کلودفلر باشند
-                if port not in CF_PORTS:
-                    return False
+                if net_type not in ["ws", "grpc"]: return False # xhttp خام حذف شد
+                if port not in CF_PORTS: return False
                 
             return True
             
     except Exception:
-        # در صورت بروز خطای فرمت، فرض را بر خرابی می‌گذاریم
         return False
     return False
 
-# ---------------- پاکسازی دیتابیس از کانفیگ‌های به دردنخور ----------------
+# ---------------- پاکسازی دیتابیس با قوانین جدید ----------------
 def clean_database_with_heuristics():
     """
-    این تابع دیتابیس فعلی را بررسی کرده و کانفیگ‌هایی که از قبل ذخیره شده‌اند 
-    اما با قوانین جدید سازگار نیستند را برای همیشه حذف می‌کند.
+    حذف تمام کانفیگ‌های قدیمی دیتابیس که با قوانین جدید همخوانی ندارند.
+    این تابع مشکل بازگشت کانفیگ‌های بی‌کیفیت به صفحه شما را حل می‌کند.
     """
+    print("🔍 در حال اسکن دیتابیس برای حذف کانفیگ‌های فاقد استاندارد جدید...")
+    if not os.path.exists(DB_FILE):
+        return
+
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     
-    # اطمینان از وجود جدول
-    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='tested_configs'")
-    if not c.fetchone():
+    try:
+        c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='tested_configs'")
+        if not c.fetchone():
+            conn.close()
+            return
+
+        c.execute("SELECT config_hash FROM tested_configs")
+        rows = c.fetchall()
+        removed_count = 0
+        
+        for row in rows:
+            config_hash = row[0]
+            if not is_iran_friendly_config(config_hash):
+                c.execute("DELETE FROM tested_configs WHERE config_hash=?", (config_hash,))
+                removed_count += 1
+                
+        conn.commit()
+        if removed_count > 0:
+            print(f"🧹 پاکسازی دیتابیس: {removed_count} کانفیگ قدیمی برای همیشه از دیتابیس حذف شدند.\n")
+        else:
+            print("✅ دیتابیس تمیز است.\n")
+    except Exception as e:
+        print(f"⚠️ خطا در پاکسازی دیتابیس: {e}")
+    finally:
         conn.close()
-        return
 
-    c.execute("SELECT config_hash FROM tested_configs")
-    rows = c.fetchall()
-    removed_count = 0
-    
-    for row in rows:
-        config_hash = row[0]
-        if not is_iran_friendly_config(config_hash):
-            c.execute("DELETE FROM tested_configs WHERE config_hash=?", (config_hash,))
-            removed_count += 1
-            
-    conn.commit()
-    conn.close()
-    
-    if removed_count > 0:
-        print(f"🧹 پاکسازی دیتابیس: {removed_count} کانفیگ قدیمی ناسازگار با الگوهای جدید، برای همیشه حذف شدند.\n")
-
-# ---------------- مدیریت وضعیت دریافت پیام‌ها ----------------
+# ---------------- توابع پایگاه داده و وضعیت ----------------
 def init_fetch_state():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -181,12 +200,10 @@ def extract_configs():
                 if msg.text:
                     found = re.findall(r'(?:vless|vmess|trojan|ss)://\S+', msg.text)
                     for link in found:
-                        # فقط کانفیگ‌هایی که شانس اتصال دارند به لیست تست می‌روند
                         if is_iran_friendly_config(link):
                             configs.add(link)
     return list(configs)
 
-# ---------------- مدیریت شمارنده اجراها ----------------
 def init_run_counter():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -211,7 +228,6 @@ def set_run_counter(value):
     conn.commit()
     conn.close()
 
-# ---------------- مدیریت پایگاه داده (تست‌شده‌ها) ----------------
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -299,7 +315,7 @@ def commit_and_push(valid_configs, new_count, total_valid):
         print("   ↳ بدون تغییر جدید، commit انجام نشد.")
         return
 
-    commit_msg = f"🔄 Batch update: +{new_count} new configs (total valid: {total_valid})"
+    commit_msg = f"🔄 Update: +{new_count} new configs (total valid: {total_valid})"
     subprocess.run(["git", "commit", "-m", commit_msg], check=True)
     subprocess.run(["git", "pull", "--rebase", "origin", "main"], check=True)
     subprocess.run(["git", "push", "origin", "main"], check=True)
@@ -546,14 +562,14 @@ def test_all_with_incremental_save(configs):
     cached = get_cached_configs()
     for config_hash, delay in cached:
         results[config_hash] = delay
-    print(f"📊 {len(cached)} کانفیگ معتبر قبلاً تست شده و از پایگاه داده بازیابی شد.\n")
+    print(f"📊 {len(cached)} کانفیگ معتبر از پایگاه داده بازیابی شد.\n")
 
     for i, link in enumerate(configs, 1):
         total_processed += 1
         short = link[:70] + ("..." if len(link) > 70 else "")
 
         if is_config_tested(link):
-            print(f"[{i}/{total}] ⏭️ {short} → قبلاً تست شده، رد می‌شود")
+            print(f"[{i}/{total}] ⏭️ {short} → قبلاً تست شده")
             continue
 
         ok, delay = test_single_config(xray_bin, link)
@@ -562,7 +578,7 @@ def test_all_with_incremental_save(configs):
             results[link] = delay
             save_tested_config(link, delay, fail_count=0)
             new_in_batch += 1
-            print(f"[{i}/{total}] ✅ {short} → Real Delay: {delay:.0f}ms (جدید)")
+            print(f"[{i}/{total}] ✅ {short} → Real Delay: {delay:.0f}ms")
         else:
             print(f"[{i}/{total}] ❌ {short} → ناموفق")
 
@@ -570,13 +586,13 @@ def test_all_with_incremental_save(configs):
             if new_in_batch > 0:
                 sorted_links = [link for link, _ in sorted(results.items(), key=lambda x: x[1])]
                 total_valid = len(sorted_links)
-                print(f"\n📦 پایان دسته {total_processed}/{total} | +{new_in_batch} کانفیگ جدید معتبر (کل: {total_valid})")
+                print(f"\n📦 پایان دسته {total_processed}/{total} | +{new_in_batch} جدید معتبر (کل: {total_valid})")
                 commit_and_push(sorted_links, new_in_batch, total_valid)
                 new_in_batch = 0
             else:
-                print(f"\n📦 پایان دسته {total_processed}/{total} | بدون کانفیگ جدید معتبر در این دسته")
+                print(f"\n📦 پایان دسته {total_processed}/{total} | بدون جدید معتبر")
 
-    print("\n🔁 شروع بازبینی کانفیگ‌های قدیمی (منقضی شده)...")
+    print("\n🔁 شروع بازبینی کانفیگ‌های قدیمی...")
     expired = get_expired_configs(MAX_RETEST)
     if not expired:
         print("✅ هیچ کانفیگ منقضی شده‌ای یافت نشد.")
@@ -589,83 +605,70 @@ def test_all_with_incremental_save(configs):
             if ok:
                 save_tested_config(config_hash, delay, fail_count=0)
                 results[config_hash] = delay
-                print(f"🔁 ✅ {short} → دوباره سالم شد (Real Delay: {delay:.0f}ms)")
+                print(f"🔁 ✅ {short} → دوباره سالم شد")
                 recheck_changes = True
             else:
                 increment_fail_count(config_hash)
                 new_fail_count = get_fail_count(config_hash)
-                print(f"🔁 ❌ {short} → همچنان خراب (شکست {new_fail_count} از {MAX_FAILURES})")
+                print(f"🔁 ❌ {short} → (شکست {new_fail_count} از {MAX_FAILURES})")
                 if new_fail_count >= MAX_FAILURES:
                     delete_config(config_hash)
                     if config_hash in results:
                         del results[config_hash]
-                    print(f"   🗑️ حذف شد (بیش از {MAX_FAILURES} شکست متوالی)")
+                    print(f"   🗑️ حذف شد")
                     recheck_changes = True
 
         if recheck_changes:
             sorted_links = [link for link, _ in sorted(results.items(), key=lambda x: x[1])]
             total_valid = len(sorted_links)
-            print(f"\n📦 پایان بازبینی | کل کانفیگ‌های معتبر: {total_valid}")
             commit_and_push(sorted_links, 0, total_valid)
-        else:
-            print("📦 پایان بازبینی | تغییری در لیست نهایی ایجاد نشد.")
 
     shutil.rmtree(os.path.dirname(xray_bin), ignore_errors=True)
-    print(f"\n🔚 تست تمام شد. مجموع کانفیگ‌های معتبر: {len(results)}")
+    print(f"\n🔚 تست تمام شد. مجموع معتبرها: {len(results)}")
     return [link for link, _ in sorted(results.items(), key=lambda x: x[1])]
 
-# ---------------- پالایش کامل کانفیگ‌های موجود ----------------
 def perform_purge():
     print("🧹 شروع پالایش کامل کانفیگ‌های موجود...")
     if not os.path.exists(CONFIG_FILE):
-        print("❌ فایل configs.txt یافت نشد!")
         return
 
     with open(CONFIG_FILE, "r", encoding="utf-8") as f:
         encoded = f.read().strip()
     if not encoded:
-        print("⚠️ فایل configs.txt خالی است. پالایش متوقف شد.")
         set_run_counter(0)
         return
 
     try:
         decoded = base64.b64decode(encoded).decode("utf-8")
         links = [line.strip() for line in decoded.split("\n") if line.strip()]
-    except Exception as e:
-        print(f"❌ خطا در خواندن فایل configs.txt: {e}")
+    except Exception:
         return
 
     unique_links = list(set(links))
-    print(f"📋 {len(unique_links)} کانفیگ یکتا در فایل یافت شد.")
-
     xray_bin = download_xray()
     results = {}
     removed = 0
 
     for link in unique_links:
-        short = link[:70] + ("..." if len(link) > 70 else "")
         ok, delay = test_single_config(xray_bin, link)
         if ok:
             results[link] = delay
             save_tested_config(link, delay, fail_count=0)
-            print(f"✅ {short} → Real Delay: {delay:.0f}ms")
         else:
             delete_config(link)
             removed += 1
-            print(f"❌ {short} → حذف شد")
 
     sorted_links = [link for link, _ in sorted(results.items(), key=lambda x: x[1])]
     total_valid = len(sorted_links)
-    print(f"\n🧹 پالایش پایان یافت. {total_valid} کانفیگ معتبر باقی ماندند (حذف: {removed})")
+    print(f"\n🧹 پالایش پایان یافت. {total_valid} معتبر باقی ماندند (حذف: {removed})")
     commit_and_push(sorted_links, 0, total_valid)
-    set_run_counter(0)  # ریست شمارنده اجراها
-
+    set_run_counter(0)
     shutil.rmtree(os.path.dirname(xray_bin), ignore_errors=True)
 
 if __name__ == "__main__":
     init_db()
     
-    # 🌟 اضافه شدن پاکسازی دیتابیس در همان ابتدای اجرا 🌟
+    # 🧹 پاکسازی اتوماتیک دیتابیس از کانفیگ‌های فاقد استاندارد در ثانیه اول اجرا
     clean_database_with_heuristics()
     
     init_fetch_state()
@@ -689,7 +692,6 @@ if __name__ == "__main__":
         exit(1)
 
     if len(raw) > MAX_TEST:
-        print(f"⚠️ محدودیت تست: فقط {MAX_TEST} کانفیگ اول تست می‌شود.\n")
         raw = raw[:MAX_TEST]
 
     valid = test_all_with_incremental_save(raw)
@@ -700,5 +702,4 @@ if __name__ == "__main__":
         f.write(encoded)
 
     set_run_counter(counter + 1)
-    print(f"\n🎉 تمام! {len(valid)} کانفیگ معتبر بر اساس Real Delay مرتب و در {CONFIG_FILE} ذخیره شد.")
     print(f"🔢 شمارنده اجرا به‌روز شد: {counter + 1} / {PURGE_INTERVAL}")
