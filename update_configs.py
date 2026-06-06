@@ -25,17 +25,17 @@ PURGE_INTERVAL = 2
 # ---------------- کلاینت تلگرام ----------------
 client = TelegramClient(StringSession(SESSION_STR), API_ID, API_HASH)
 
-# ---------------- فیلتر بسیار سخت‌گیرانه (بر اساس داده‌های DPI) ----------------
+# ---------------- فیلتر بسیار سخت‌گیرانه و دقیق ----------------
 def is_invalid_sni(s):
     if not s: 
         return False
     s = s.lower().strip()
     
-    # مسدودسازی استفاده از آی‌پی به جای دامنه در SNI
+    # مسدودسازی استفاده از آی‌پی به جای دامنه
     if re.match(r"^(\d{1,3}\.){3}\d{1,3}$", s): 
         return True
         
-    # لیست سیاه دامنه‌های زباله که به طور کامل توسط اوپراتور شما دراپ می‌شوند
+    # لیست سیاه بسیار گسترده دامنه‌های زباله و کلودفلر رایگان
     bad_domains = [
         "workers.dev", "pages.dev", "fastly.net", "ndjp.net", "ccwu.cc",
         "chickenkiller.com", "09vpn.com", "gamelistak.com", "boobie.eu.cc",
@@ -43,7 +43,8 @@ def is_invalid_sni(s):
         "myfymain.com", "fromblancwithlove.com", "octopusss", "picassooo.info",
         "mammad.shop", "g9q.fun", "rainzone.ir", "samanehha.co", "s3-cloud.xyz",
         "ignorelist.com", "solid-dev1.online", "twilightparadox.com", "bexum.fun",
-        "cgiproxy", "connectv.net", "cnae.top", "9889888.xyz", "cfvip.lol"
+        "cgiproxy", "connectv.net", "cnae.top", "9889888.xyz", "cfvip.lol",
+        "sajadi.lol", "ir" # دامنه های .ir برای خروج از کشور منطقی نیستند و بلاک میشوند
     ]
     if any(bd in s for bd in bad_domains): 
         return True
@@ -52,7 +53,6 @@ def is_invalid_sni(s):
 
 def is_burned_reality_sni(s):
     s = s.lower().strip()
-    # SNIهای معروفی که ریالیتی روی آن‌ها فوراً ریست (Reset) می‌شود
     burned = [
         "yahoo", "microsoft", "cloudflare", "sony", "apple", "icloud", 
         "amazon", "max.ru", "vk-portal", "deepl", "tradingview", "yandex",
@@ -64,10 +64,20 @@ def is_burned_reality_sni(s):
     return False
 
 def is_iran_friendly_config(link):
+    """
+    قوانین جدید بر اساس تحلیل رفتاری DPI:
+    1. تروجان مسدود است.
+    2. Vless بدون TLS/Reality مسدود است.
+    3. داشتن fp معتبر (chrome/firefox/edge) برای Vless الزامی است.
+    """
     try:
         CF_TLS_PORTS = {443, 2053, 2083, 2087, 8443, 2096}
         CF_HTTP_PORTS = {80, 8080, 8880, 2052, 2082, 2086, 2095}
         
+        # تروجان دراپ می‌شود
+        if link.startswith("trojan://"):
+            return False
+
         if link.startswith("vmess://"):
             b64 = link[8:]
             b64 += "=" * ((4 - len(b64) % 4) % 4)
@@ -78,7 +88,6 @@ def is_iran_friendly_config(link):
             sni = decoded.get("sni", "")
             host = decoded.get("host", "")
             
-            # Vmess خام به طور قطعی مسدود است
             if net == "tcp" and tls != "tls": return False
             if tls != "tls" and port not in CF_HTTP_PORTS: return False
             if tls == "tls" and port not in CF_TLS_PORTS: return False
@@ -89,14 +98,13 @@ def is_iran_friendly_config(link):
             parsed = urlparse(link)
             port = parsed.port
             if not port: return False
-            # شدوساکس روی پورت‌های TLS مثل 443 کاملا مسدود است
-            if port in CF_TLS_PORTS: return False
-            if port not in CF_HTTP_PORTS: return False
+            # SS روی پورت 443 مسدود است، اما روی 8080 اوکی است
+            if port == 443: return False
+            if port not in CF_HTTP_PORTS and port not in [8443, 2053]: return False
             return True
 
-        elif link.startswith("vless://") or link.startswith("trojan://"):
+        elif link.startswith("vless://"):
             parsed = urlparse(link)
-            protocol = "vless" if link.startswith("vless://") else "trojan"
             port = parsed.port if parsed.port else 443
             params = parse_qs(parsed.query)
             
@@ -108,30 +116,22 @@ def is_iran_friendly_config(link):
             host = params.get("host", [""])[0]
             
             actual_sni = sni or host or parsed.hostname
-            
             if is_invalid_sni(actual_sni): return False
             
-            # تروجان خام روی TCP بلاک می‌شود (تنها تروجان‌های WS موفق بودند)
-            if protocol == "trojan" and net_type == "tcp" and security != "reality":
+            # VLESS بدون امنیت (none) به طور قطع مسدود می‌شود
+            if security not in ["tls", "reality"]: 
                 return False
 
-            if port == 443 and security not in ["tls", "reality"]: return False
+            # دارا بودن اثر انگشت معتبر الزامی است
+            if fp not in ["chrome", "firefox", "edge", "safari"]: 
+                return False
             
             if security == "reality":
                 if not pbk: return False
-                # فقط اثر انگشت‌های طبیعی اجازه عبور دارند (random مسدود می‌شود)
-                if fp not in ["chrome", "firefox", "edge", "safari"]: return False
                 if is_burned_reality_sni(actual_sni): return False
                 
             elif security == "tls":
                 if port not in CF_TLS_PORTS: return False
-                # ترافیک خام TCP با TLS حتما نیازمند اثرانگشت است
-                if net_type == "tcp" and fp not in ["chrome", "firefox", "edge", "safari"]: 
-                    return False
-                
-            else: 
-                if net_type not in ["ws", "grpc", "httpupgrade"]: return False
-                if port not in CF_HTTP_PORTS: return False
                 
             return True
             
@@ -166,7 +166,7 @@ def clean_database_with_heuristics():
                 
         conn.commit()
         if removed_count > 0:
-            print(f"🧹 پاکسازی دیتابیس: {removed_count} کانفیگ قدیمی برای همیشه از دیتابیس حذف شدند.\n")
+            print(f"🧹 پاکسازی دیتابیس: {removed_count} کانفیگ قدیمی ناسازگار از دیتابیس حذف شدند.\n")
         else:
             print("✅ دیتابیس تمیز است.\n")
     except Exception as e:
