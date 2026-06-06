@@ -13,73 +13,93 @@ CHANNELS = ["@SOSkeyNET", "@Mrshahabx", "@vslshi"]
 CONFIG_FILE = "configs.txt"
 DB_FILE = "tested_configs.db"
 TEST_URL = "http://www.gstatic.com/generate_204"
-TEST_TIMEOUT = 1
-MAX_TEST = 6000
+TEST_TIMEOUT = 0.5
+MAX_TEST = 2000
 BATCH_SIZE = 100
 
 EXPIRY_HOURS = 12
 MAX_RETEST = 40
 MAX_FAILURES = 2
-PURGE_INTERVAL = 2
+
+# --------------- تنظیمات پالایش دوره‌ای ---------------
+PURGE_INTERVAL = 3
 
 # ---------------- کلاینت تلگرام ----------------
 client = TelegramClient(StringSession(SESSION_STR), API_ID, API_HASH)
 
-# ---------------- فیلتر سخت‌گیرانه مبتنی بر رفتار DPI ----------------
+# ---------------- فیلتر بسیار سخت‌گیرانه (بر اساس داده‌های DPI) ----------------
 def is_invalid_sni(s):
-    if not s:
+    if not s: 
         return False
-    s_lower = s.lower()
-    # 1. آیا SNI یک آی‌پی آدرس است؟ (تخلف از پروتکل TLS)
-    if re.match(r"^\d{1,3}(\.\d{1,3}){3}$", s_lower): 
-        return True
+    s = s.lower().strip()
     
-    # 2. لیست سیاه دامنه‌های مسدود یا حساسیت‌زا
-    bad_domains = [".workers.dev", ".pages.dev", ".ir", ".ccwu.cc", "fastly.net"]
-    if any(bd in s_lower for bd in bad_domains):
+    # مسدودسازی آی‌پی به جای دامنه
+    if re.match(r"^(\d{1,3}\.){3}\d{1,3}$", s): 
+        return True
+        
+    # لیست سیاه دامنه‌های زباله که به طور کامل توسط اوپراتور شما دراپ می‌شوند
+    bad_domains = [
+        ".workers.dev", ".pages.dev", ".ir", ".ccwu.cc", ".fastly.net",
+        "ndjp.net", "rainzone.ir", "samanehha.co", "pink-perfect.ru", 
+        "boobie.eu.cc", "octopusss", "chickenkiller.com", "gamelistak.com", 
+        "stardevs.top", "ziqiyun.xyz", "freeonline.pro", "rooster465.autos", 
+        "myfymain.com", "fromblancwithlove.com", "09vpn.com", "solid-dev1.online", 
+        "twilightparadox.com", "bexum.fun", "s3-cloud"
+    ]
+    if any(bd in s for bd in bad_domains): 
         return True
         
     return False
 
-def is_iran_friendly_config(link):
-    """
-    بررسی دقیق پارامترها پیش از تست برای حذف قطعی کانفیگ‌های محکوم به شکست
-    """
-    try:
-        CF_PORTS = {80, 443, 2052, 2053, 2082, 2083, 2086, 2087, 8080, 8443, 8880, 2095, 2096}
-        # لیست SNIهای سوخته برای Reality بر اساس لاگ‌های اپراتور
-        burned_reality_snis = {"yahoo.com", "www.yahoo.com", "microsoft.com", "www.microsoft.com", 
-                               "cloudflare.com", "www.cloudflare.com", "sony.com", "www.sony.com", 
-                               "apple.com", "www.apple.com"}
+def is_burned_reality_sni(s):
+    s = s.lower().strip()
+    # SNIهای معروفی که ریالیتی روی آن‌ها فوراً ریست (Reset) می‌شود
+    burned = [
+        "yahoo", "microsoft", "cloudflare", "sony", "apple", "icloud", 
+        "amazon", "max.ru", "vk-portal", "deepl", "tradingview", "yandex",
+        "mozilla", "vk.com", "speedtest", "zoom.us", "dl.google.com",
+        "alibaba", "kinopoisk"
+    ]
+    if any(b in s for b in burned): 
+        return True
+    return False
 
+def is_iran_friendly_config(link):
+    try:
+        CF_TLS_PORTS = {443, 2053, 2083, 2087, 8443, 2096}
+        CF_HTTP_PORTS = {80, 8080, 8880, 2052, 2082, 2086, 2095}
+        
         if link.startswith("vmess://"):
             b64 = link[8:]
-            padded = b64 + '=' * (4 - len(b64) % 4) if len(b64) % 4 != 0 else b64
-            decoded = json.loads(base64.b64decode(padded).decode('utf-8'))
-            
+            b64 += "=" * ((4 - len(b64) % 4) % 4)
+            decoded = json.loads(base64.b64decode(b64).decode('utf-8'))
             port = int(decoded.get("port", 443))
             net = decoded.get("net", "tcp")
             tls = decoded.get("tls", "")
             sni = decoded.get("sni", "")
             host = decoded.get("host", "")
             
-            if port == 443 and tls != "tls": return False # روی 443 فقط TLS مجاز است
+            # Vmess خام مسدود است
+            if net == "tcp" and tls != "tls": return False
+            if tls != "tls" and port not in CF_HTTP_PORTS: return False
+            if tls == "tls" and port not in CF_TLS_PORTS: return False
             if is_invalid_sni(sni) or is_invalid_sni(host): return False
             return True
-            
+
         elif link.startswith("ss://"):
             parsed = urlparse(link)
-            port = parsed.port if parsed.port else 443
-            # شدوساکس خام روی پورت 443 مسدود می‌شود
-            if port == 443: return False
-            if port not in [80, 8080, 8443, 2053]: return False
+            port = parsed.port
+            if not port: return False
+            # شدوساکس روی پورت‌های TLS مثل 443 کاملا مسدود است
+            if port in CF_TLS_PORTS: return False
+            if port not in CF_HTTP_PORTS: return False
             return True
-            
+
         elif link.startswith("vless://") or link.startswith("trojan://"):
             parsed = urlparse(link)
             port = parsed.port if parsed.port else 443
-            
             params = parse_qs(parsed.query)
+            
             security = params.get("security", [""])[0]
             net_type = params.get("type", ["tcp"])[0]
             fp = params.get("fp", [""])[0]
@@ -87,19 +107,24 @@ def is_iran_friendly_config(link):
             sni = params.get("sni", [""])[0]
             host = params.get("host", [""])[0]
             
-            if is_invalid_sni(sni) or is_invalid_sni(host): return False
-            if port == 443 and security not in ["tls", "reality"]: return False
+            actual_sni = sni or host or parsed.hostname
+            
+            if is_invalid_sni(actual_sni): return False
             
             if security == "reality":
                 if not pbk: return False
-                if sni.lower() in burned_reality_snis: return False
+                # فقط اثر انگشت‌های طبیعی اجازه عبور دارند
+                if fp not in ["chrome", "firefox", "edge"]: return False
+                if is_burned_reality_sni(actual_sni): return False
                 
             elif security == "tls":
-                if not fp and port not in CF_PORTS: return False
+                if port not in CF_TLS_PORTS: return False
+                # ترافیک خام TCP با TLS حتما نیازمند اثرانگشت است
+                if net_type == "tcp" and not fp: return False
                 
-            elif security == "none" or not security:
-                if net_type not in ["ws", "grpc"]: return False # xhttp خام حذف شد
-                if port not in CF_PORTS: return False
+            else: 
+                if net_type not in ["ws", "grpc", "httpupgrade"]: return False
+                if port not in CF_HTTP_PORTS: return False
                 
             return True
             
@@ -107,12 +132,8 @@ def is_iran_friendly_config(link):
         return False
     return False
 
-# ---------------- پاکسازی دیتابیس با قوانین جدید ----------------
+# ---------------- پاکسازی دیتابیس ----------------
 def clean_database_with_heuristics():
-    """
-    حذف تمام کانفیگ‌های قدیمی دیتابیس که با قوانین جدید همخوانی ندارند.
-    این تابع مشکل بازگشت کانفیگ‌های بی‌کیفیت به صفحه شما را حل می‌کند.
-    """
     print("🔍 در حال اسکن دیتابیس برای حذف کانفیگ‌های فاقد استاندارد جدید...")
     if not os.path.exists(DB_FILE):
         return
@@ -315,7 +336,7 @@ def commit_and_push(valid_configs, new_count, total_valid):
         print("   ↳ بدون تغییر جدید، commit انجام نشد.")
         return
 
-    commit_msg = f"🔄 Update: +{new_count} new configs (total valid: {total_valid})"
+    commit_msg = f"🔄 Batch update: +{new_count} new configs (total valid: {total_valid})"
     subprocess.run(["git", "commit", "-m", commit_msg], check=True)
     subprocess.run(["git", "pull", "--rebase", "origin", "main"], check=True)
     subprocess.run(["git", "push", "origin", "main"], check=True)
@@ -667,10 +688,7 @@ def perform_purge():
 
 if __name__ == "__main__":
     init_db()
-    
-    # 🧹 پاکسازی اتوماتیک دیتابیس از کانفیگ‌های فاقد استاندارد در ثانیه اول اجرا
     clean_database_with_heuristics()
-    
     init_fetch_state()
     init_run_counter()
     setup_git()
@@ -684,7 +702,7 @@ if __name__ == "__main__":
     print(f"📊 شمارنده اجرا: {counter} / {PURGE_INTERVAL} → اجرای عادی")
     print("📡 دریافت کانفیگ‌ها از تلگرام...")
     raw = extract_configs()
-    print(f"📋 {len(raw)} کانفیگ یکتا پس از پالایش اولیه ساختاری، برای تست آماده شد.\n")
+    print(f"📋 {len(raw)} کانفیگ یکتا پس از فیلترینگ بسیار سخت‌گیرانه، برای تست آماده شد.\n")
 
     if not raw:
         print("⚠️ هیچ کانفیگ سالمی پیدا نشد!")
