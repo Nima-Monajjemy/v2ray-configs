@@ -20,9 +20,7 @@ BATCH_SIZE = 100
 EXPIRY_HOURS = 12
 MAX_RETEST = 40
 MAX_FAILURES = 2
-
-# --------------- تنظیمات پالایش دوره‌ای ---------------
-PURGE_INTERVAL = 3
+PURGE_INTERVAL = 2
 
 # ---------------- کلاینت تلگرام ----------------
 client = TelegramClient(StringSession(SESSION_STR), API_ID, API_HASH)
@@ -33,18 +31,19 @@ def is_invalid_sni(s):
         return False
     s = s.lower().strip()
     
-    # مسدودسازی آی‌پی به جای دامنه
+    # مسدودسازی استفاده از آی‌پی به جای دامنه در SNI
     if re.match(r"^(\d{1,3}\.){3}\d{1,3}$", s): 
         return True
         
     # لیست سیاه دامنه‌های زباله که به طور کامل توسط اوپراتور شما دراپ می‌شوند
     bad_domains = [
-        ".workers.dev", ".pages.dev", ".ir", ".ccwu.cc", ".fastly.net",
-        "ndjp.net", "rainzone.ir", "samanehha.co", "pink-perfect.ru", 
-        "boobie.eu.cc", "octopusss", "chickenkiller.com", "gamelistak.com", 
-        "stardevs.top", "ziqiyun.xyz", "freeonline.pro", "rooster465.autos", 
-        "myfymain.com", "fromblancwithlove.com", "09vpn.com", "solid-dev1.online", 
-        "twilightparadox.com", "bexum.fun", "s3-cloud"
+        "workers.dev", "pages.dev", "fastly.net", "ndjp.net", "ccwu.cc",
+        "chickenkiller.com", "09vpn.com", "gamelistak.com", "boobie.eu.cc",
+        "pink-perfect.ru", "stardevs.top", "ziqiyun.xyz", "rooster465.autos",
+        "myfymain.com", "fromblancwithlove.com", "octopusss", "picassooo.info",
+        "mammad.shop", "g9q.fun", "rainzone.ir", "samanehha.co", "s3-cloud.xyz",
+        "ignorelist.com", "solid-dev1.online", "twilightparadox.com", "bexum.fun",
+        "cgiproxy", "connectv.net", "cnae.top", "9889888.xyz", "cfvip.lol"
     ]
     if any(bd in s for bd in bad_domains): 
         return True
@@ -57,8 +56,8 @@ def is_burned_reality_sni(s):
     burned = [
         "yahoo", "microsoft", "cloudflare", "sony", "apple", "icloud", 
         "amazon", "max.ru", "vk-portal", "deepl", "tradingview", "yandex",
-        "mozilla", "vk.com", "speedtest", "zoom.us", "dl.google.com",
-        "alibaba", "kinopoisk"
+        "mozilla", "vk.com", "speedtest", "zoom.us", "google", "ya.ru",
+        "alibaba", "kinopoisk", "vk.ru", "sberbank", "ebay", "asus.com"
     ]
     if any(b in s for b in burned): 
         return True
@@ -79,7 +78,7 @@ def is_iran_friendly_config(link):
             sni = decoded.get("sni", "")
             host = decoded.get("host", "")
             
-            # Vmess خام مسدود است
+            # Vmess خام به طور قطعی مسدود است
             if net == "tcp" and tls != "tls": return False
             if tls != "tls" and port not in CF_HTTP_PORTS: return False
             if tls == "tls" and port not in CF_TLS_PORTS: return False
@@ -97,6 +96,7 @@ def is_iran_friendly_config(link):
 
         elif link.startswith("vless://") or link.startswith("trojan://"):
             parsed = urlparse(link)
+            protocol = "vless" if link.startswith("vless://") else "trojan"
             port = parsed.port if parsed.port else 443
             params = parse_qs(parsed.query)
             
@@ -111,16 +111,23 @@ def is_iran_friendly_config(link):
             
             if is_invalid_sni(actual_sni): return False
             
+            # تروجان خام روی TCP بلاک می‌شود (تنها تروجان‌های WS موفق بودند)
+            if protocol == "trojan" and net_type == "tcp" and security != "reality":
+                return False
+
+            if port == 443 and security not in ["tls", "reality"]: return False
+            
             if security == "reality":
                 if not pbk: return False
-                # فقط اثر انگشت‌های طبیعی اجازه عبور دارند
-                if fp not in ["chrome", "firefox", "edge"]: return False
+                # فقط اثر انگشت‌های طبیعی اجازه عبور دارند (random مسدود می‌شود)
+                if fp not in ["chrome", "firefox", "edge", "safari"]: return False
                 if is_burned_reality_sni(actual_sni): return False
                 
             elif security == "tls":
                 if port not in CF_TLS_PORTS: return False
                 # ترافیک خام TCP با TLS حتما نیازمند اثرانگشت است
-                if net_type == "tcp" and not fp: return False
+                if net_type == "tcp" and fp not in ["chrome", "firefox", "edge", "safari"]: 
+                    return False
                 
             else: 
                 if net_type not in ["ws", "grpc", "httpupgrade"]: return False
@@ -336,7 +343,7 @@ def commit_and_push(valid_configs, new_count, total_valid):
         print("   ↳ بدون تغییر جدید، commit انجام نشد.")
         return
 
-    commit_msg = f"🔄 Batch update: +{new_count} new configs (total valid: {total_valid})"
+    commit_msg = f"🔄 Update: +{new_count} new configs (total valid: {total_valid})"
     subprocess.run(["git", "commit", "-m", commit_msg], check=True)
     subprocess.run(["git", "pull", "--rebase", "origin", "main"], check=True)
     subprocess.run(["git", "push", "origin", "main"], check=True)
