@@ -37,7 +37,14 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add configs.txt us_configs.txt in_configs.txt tested_configs.db
+          
+          # اضافه کردن فایل‌ها به گیت، فقط در صورتی که وجود داشته باشند
+          for file in configs.txt us_configs.txt in_configs.txt tested_configs.db; do
+            if [ -f "$file" ]; then
+              git add "$file"
+            fi
+          done
+
           if git diff --cached --quiet; then
             echo "No changes to commit"
           else
