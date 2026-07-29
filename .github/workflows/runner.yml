@@ -24,7 +24,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install telethon requests beautifulsoup4
+          pip install telethon requests beautifulsoup4 cloudscraper
 
       - name: Run script
         env:
@@ -38,7 +38,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           
-          # اضافه کردن فایل‌ها به گیت، فقط در صورتی که وجود داشته باشند
           for file in configs.txt us_configs.txt in_configs.txt tested_configs.db; do
             if [ -f "$file" ]; then
               git add "$file"
