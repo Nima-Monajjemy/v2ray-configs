@@ -1,4 +1,4 @@
-import os, re, subprocess, tempfile, json, time, requests, shutil, base64, sqlite3
+import os, re, subprocess, tempfile, json, time, requests, shutil, base64, sqlite3, html
 from urllib.parse import urlparse, parse_qs
 from telethon import TelegramClient
 from telethon.sessions import StringSession
@@ -264,7 +264,7 @@ def extract_telegram_configs():
     return list(configs)
 
 def extract_v2nodes_configs(base_url):
-    print(f"🌐 استخراج تحت وب از: {base_url} (با دور زدن Cloudflare)")
+    print(f"🌐 استخراج تحت وب از: {base_url}")
     configs = set()
     scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False})
     
@@ -285,15 +285,22 @@ def extract_v2nodes_configs(base_url):
                 detail_links.add(href)
 
         print(f"🔗 {len(detail_links)} صفحه اختصاصی یافت شد. ورود به لینک‌ها...")
+        total_found = 0
         
         for link in detail_links:
             try:
                 time.sleep(1)
                 detail_resp = scraper.get(link, timeout=15)
                 if detail_resp.status_code == 200:
-                    for config in re.findall(r'(?:vless|vmess|trojan|ss)://[^\s<"\'\n]+', detail_resp.text):
-                        if is_iran_friendly_config(config): configs.add(config)
+                    found_links = re.findall(r'(?:vless|vmess|trojan|ss)://[^\s<"\'\n]+', detail_resp.text)
+                    for config in found_links:
+                        # برطرف کردن مشکل کاراکترهای HTML مانند &amp;
+                        config = html.unescape(config)
+                        configs.add(config)
+                        total_found += 1
             except: pass
+        
+        print(f"✅ {total_found} کانفیگ با موفقیت استخراج شد و مستقیماً به لیست اضافه می‌گردد.")
                 
     except Exception as e:
         print(f"⚠️ خطا در ارتباط: {e}")
@@ -317,7 +324,7 @@ def git_commit_all():
     subprocess.run(["git", "pull", "--rebase", "origin", "main"], check=True)
     subprocess.run(["git", "push", "origin", "main"], check=True)
 
-# ---------------- تست Xray (فقط برای تلگرام) ----------------
+# ---------------- تست Xray (فقط تلگرام) ----------------
 def download_xray():
     url = "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip"
     resp = requests.get(url, stream=True, timeout=30)
@@ -410,9 +417,7 @@ def perform_purge():
     print("🧹 شروع پالایش...")
     xray_bin = download_xray()
     for sid, fn in CONFIG_FILES.items():
-        # پالایش (تست مجدد فایل‌های ذخیره شده) فقط برای کانفیگ‌های تلگرام انجام شود
         if sid != "telegram": continue
-        
         if not os.path.exists(fn): continue
         try:
             links = set(base64.b64decode(open(fn).read().strip()).decode().split())
@@ -445,9 +450,9 @@ if __name__ == "__main__":
         else:
             raw = extract_v2nodes_configs(url)
             if not raw: print("⚠️ هیچ کانفیگ سالمی یافت نشد."); continue
-            # برای سایت v2nodes نیازی به تست پینگ نیست؛ مستقیم به لیست اضافه و ذخیره می‌شوند
-            valid = list(set(raw)) # حذف کانفیگ‌های تکراری
+            # حذف موارد تکراری و ذخیره مستقیم
+            valid = list(set(raw))
             save_to_file(valid, CONFIG_FILES[sid])
-            print(f"📦 فایل {CONFIG_FILES[sid]} با {len(valid)} کانفیگ (بدون تست) ذخیره شد.")
+            print(f"📦 فایل {CONFIG_FILES[sid]} با {len(valid)} کانفیگ (ورود مستقیم) ذخیره شد.")
         
     git_commit_all(); set_run_counter(counter + 1); shutil.rmtree(os.path.dirname(xray_bin), ignore_errors=True)
