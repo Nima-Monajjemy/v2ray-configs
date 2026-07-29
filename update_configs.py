@@ -14,7 +14,7 @@ CHANNELS = ["@SOSkeyNET", "@Mrshahabx", "@vslshi"]
 CONFIG_FILES = {
     "telegram": "configs.txt",
     "v2nodes_us": "us_configs.txt",
-    "v2nodes_3328404": "3328404_configs.txt"
+    "v2nodes_in": "in_configs.txt"
 }
 
 DB_FILE = "tested_configs.db"
@@ -316,7 +316,6 @@ def extract_v2nodes_configs(base_url):
         # استخراج لینک‌های اختصاصی هر کانفیگ در صفحه مرجع
         for a in soup.find_all('a', href=True):
             href = a['href']
-            # الگوی لینک‌های داخلی مرسوم در v2nodes
             if re.match(r'^/(?:server|node|post)s?/[\w-]+/?', href, re.IGNORECASE):
                 detail_links.add("https://www.v2nodes.com" + href.lstrip('/'))
             elif href.startswith("https://www.v2nodes.com/") and re.search(r'/(?:server|node|post)s?/', href, re.IGNORECASE):
@@ -326,10 +325,9 @@ def extract_v2nodes_configs(base_url):
         
         for link in detail_links:
             try:
-                time.sleep(0.3) # جلوگیری از بلاک شدن به دلیل درخواست سریع
+                time.sleep(0.3)
                 detail_resp = requests.get(link, headers=headers, timeout=10)
                 if detail_resp.status_code == 200:
-                    # پیدا کردن لینک‌های استاندارد کانفیگ از متن خام (حذف کاراکترهای مزاحم HTML)
                     found = re.findall(r'(?:vless|vmess|trojan|ss)://[^\s<"\'\n]+', detail_resp.text)
                     for config in found:
                         if is_iran_friendly_config(config):
@@ -368,7 +366,7 @@ def git_commit_all():
     subprocess.run(["git", "push", "origin", "main"], check=True)
     print("↳ تغییرات با موفقیت در مخزن ثبت شد.")
 
-# ---------------- توابع تست Xray (مشابه قبل با کمی بهینه‌سازی) ----------------
+# ---------------- توابع تست Xray ----------------
 def download_xray():
     url = "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip"
     resp = requests.get(url, stream=True, timeout=30)
@@ -382,7 +380,6 @@ def download_xray():
     return xray_bin
 
 def parse_link_to_outbound(link):
-    # (همان ساختار تبدیل لینک به کانفیگ JSON که داشتید بدون تغییر)
     try:
         if link.startswith("vmess://"):
             b64 = link[8:]
@@ -516,13 +513,11 @@ def process_source(source_name, raw_configs, xray_bin):
     results = {}
     total = len(raw_configs)
     
-    # 1. بازیابی کانفیگ‌های مختص این سورس از کش
     cached = get_cached_configs(source_name)
     for config_hash, delay in cached:
         results[config_hash] = delay
     print(f"📊 {len(cached)} کانفیگ کش‌شده برای {source_name} یافت شد.")
 
-    # 2. تست کانفیگ‌های جدید
     for i, link in enumerate(raw_configs, 1):
         if is_config_tested(link):
             continue
@@ -536,7 +531,6 @@ def process_source(source_name, raw_configs, xray_bin):
         else:
             print(f"[{i}/{total}] ❌ {short} → ناموفق")
 
-    # 3. بازبینی کانفیگ‌های قدیمیِ همین سورس
     expired = get_expired_configs(MAX_RETEST, source_name)
     if expired:
         print(f"\n🔁 بازبینی {len(expired)} کانفیگ قدیمی برای {source_name}...")
@@ -587,7 +581,6 @@ def perform_purge():
     set_run_counter(0)
     shutil.rmtree(os.path.dirname(xray_bin), ignore_errors=True)
 
-
 # ---------------- اجرای اصلی برنامه ----------------
 if __name__ == "__main__":
     init_db()
@@ -603,11 +596,11 @@ if __name__ == "__main__":
     print("📥 دانلود Xray-core...")
     xray_bin = download_xray()
     
-    # لیست سورس‌ها و آدرس‌های مربوطه
+    # لیست سورس‌ها و آدرس‌های مربوطه به روزرسانی شد
     sources_to_scrape = [
         ("telegram", None),
         ("v2nodes_us", "https://www.v2nodes.com/country/us/"),
-        ("v2nodes_3328404", "https://www.v2nodes.com/servers/3328404/")
+        ("v2nodes_in", "https://www.v2nodes.com/country/in/")
     ]
 
     for source_id, url in sources_to_scrape:
@@ -627,12 +620,10 @@ if __name__ == "__main__":
             
         valid_configs = process_source(source_id, raw_configs, xray_bin)
         
-        # ذخیره در فایل مخصوص به خودش
         target_file = CONFIG_FILES[source_id]
         save_to_file(valid_configs, target_file)
         print(f"📦 فایل {target_file} با {len(valid_configs)} کانفیگ ذخیره شد.")
 
-    # کامیت کردن تمام فایل‌های جدید یک‌جا در انتهای کار
     print("\n🔄 ثبت تغییرات در گیت...")
     git_commit_all()
     
