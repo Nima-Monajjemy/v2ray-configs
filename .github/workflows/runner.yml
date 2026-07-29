@@ -24,7 +24,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install telethon requests
+          pip install telethon requests beautifulsoup4
 
       - name: Run script
         env:
@@ -37,11 +37,11 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add configs.txt tested_configs.db
+          git add configs.txt us_configs.txt 3328404_configs.txt tested_configs.db
           if git diff --cached --quiet; then
             echo "No changes to commit"
           else
-            git commit -m "🔄 Update configs with Real Delay test"
+            git commit -m "🔄 Update all config sources with Real Delay test"
             git pull --rebase origin main
             git push origin main
           fi
