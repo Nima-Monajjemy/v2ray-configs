@@ -3,6 +3,7 @@ from urllib.parse import urlparse, parse_qs
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 from bs4 import BeautifulSoup
+import cloudscraper
 
 # ---------------- تنظیمات ----------------
 API_ID = int(os.environ["API_ID"])
@@ -33,13 +34,9 @@ client = TelegramClient(StringSession(SESSION_STR), API_ID, API_HASH)
 
 # ---------------- فیلتر بسیار سخت‌گیرانه و دقیق ----------------
 def is_invalid_sni(s):
-    if not s: 
-        return False
+    if not s: return False
     s = s.lower().strip()
-    
-    if re.match(r"^(\d{1,3}\.){3}\d{1,3}$", s): 
-        return True
-        
+    if re.match(r"^(\d{1,3}\.){3}\d{1,3}$", s): return True
     bad_domains = [
         "workers.dev", "pages.dev", "fastly.net", "ndjp.net", "ccwu.cc",
         "chickenkiller.com", "09vpn.com", "gamelistak.com", "boobie.eu.cc",
@@ -50,8 +47,7 @@ def is_invalid_sni(s):
         "cgiproxy", "connectv.net", "cnae.top", "9889888.xyz", "cfvip.lol",
         "sajadi.lol", "ir"
     ]
-    if any(bd in s for bd in bad_domains): 
-        return True
+    if any(bd in s for bd in bad_domains): return True
     return False
 
 def is_burned_reality_sni(s):
@@ -62,8 +58,7 @@ def is_burned_reality_sni(s):
         "mozilla", "vk.com", "speedtest", "zoom.us", "google", "ya.ru",
         "alibaba", "kinopoisk", "vk.ru", "sberbank", "ebay", "asus.com"
     ]
-    if any(b in s for b in burned): 
-        return True
+    if any(b in s for b in burned): return True
     return False
 
 def is_iran_friendly_config(link):
@@ -71,8 +66,7 @@ def is_iran_friendly_config(link):
         CF_TLS_PORTS = {443, 2053, 2083, 2087, 8443, 2096}
         CF_HTTP_PORTS = {80, 8080, 8880, 2052, 2082, 2086, 2095}
         
-        if link.startswith("trojan://"):
-            return False
+        if link.startswith("trojan://"): return False
         if link.startswith("vmess://"):
             b64 = link[8:]
             b64 += "=" * ((4 - len(b64) % 4) % 4)
@@ -110,38 +104,28 @@ def is_iran_friendly_config(link):
             
             actual_sni = sni or host or parsed.hostname
             if is_invalid_sni(actual_sni): return False
-            
-            if security not in ["tls", "reality"]: 
-                return False
-            if fp not in ["chrome", "firefox", "edge", "safari"]: 
-                return False
+            if security not in ["tls", "reality"]: return False
+            if fp not in ["chrome", "firefox", "edge", "safari"]: return False
             
             if security == "reality":
                 if not pbk: return False
                 if is_burned_reality_sni(actual_sni): return False
             elif security == "tls":
                 if port not in CF_TLS_PORTS: return False
-                
             return True
-            
-    except Exception:
-        return False
+    except: return False
     return False
 
-# ---------------- توابع پایگاه داده و وضعیت ----------------
+# ---------------- توابع پایگاه داده ----------------
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS tested_configs
                  (config_hash TEXT PRIMARY KEY, real_delay REAL, last_test_time REAL)''')
-    try:
-        c.execute("ALTER TABLE tested_configs ADD COLUMN fail_count INTEGER DEFAULT 0")
-    except sqlite3.OperationalError:
-        pass
-    try:
-        c.execute("ALTER TABLE tested_configs ADD COLUMN source TEXT DEFAULT 'telegram'")
-    except sqlite3.OperationalError:
-        pass
+    try: c.execute("ALTER TABLE tested_configs ADD COLUMN fail_count INTEGER DEFAULT 0")
+    except: pass
+    try: c.execute("ALTER TABLE tested_configs ADD COLUMN source TEXT DEFAULT 'telegram'")
+    except: pass
     conn.commit()
     conn.close()
 
@@ -151,21 +135,17 @@ def clean_database_with_heuristics():
     c = conn.cursor()
     try:
         c.execute("SELECT config_hash FROM tested_configs")
-        rows = c.fetchall()
-        for row in rows:
+        for row in c.fetchall():
             if not is_iran_friendly_config(row[0]):
                 c.execute("DELETE FROM tested_configs WHERE config_hash=?", (row[0],))
         conn.commit()
-    except Exception:
-        pass
-    finally:
-        conn.close()
+    except: pass
+    finally: conn.close()
 
 def init_fetch_state():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS fetch_state
-                 (channel TEXT PRIMARY KEY, last_msg_id INTEGER)''')
+    c.execute("CREATE TABLE IF NOT EXISTS fetch_state (channel TEXT PRIMARY KEY, last_msg_id INTEGER)")
     conn.commit()
     conn.close()
 
@@ -187,8 +167,7 @@ def set_last_msg_id(channel, msg_id):
 def init_run_counter():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS run_counter
-                 (id INTEGER PRIMARY KEY, counter INTEGER)''')
+    c.execute("CREATE TABLE IF NOT EXISTS run_counter (id INTEGER PRIMARY KEY, counter INTEGER)")
     c.execute("INSERT OR IGNORE INTO run_counter (id, counter) VALUES (1, 0)")
     conn.commit()
     conn.close()
@@ -212,17 +191,14 @@ def is_config_tested(config_hash):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("SELECT real_delay FROM tested_configs WHERE config_hash=?", (config_hash,))
-    result = c.fetchone()
+    res = c.fetchone()
     conn.close()
-    return result is not None
+    return res is not None
 
-def save_tested_config(config_hash, real_delay, source, fail_count=0):
+def save_tested_config(config_hash, delay, source, fail=0):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute('''INSERT OR REPLACE INTO tested_configs 
-                 (config_hash, real_delay, last_test_time, fail_count, source) 
-                 VALUES (?, ?, ?, ?, ?)''',
-              (config_hash, real_delay, time.time(), fail_count, source))
+    c.execute("INSERT OR REPLACE INTO tested_configs (config_hash, real_delay, last_test_time, fail_count, source) VALUES (?, ?, ?, ?, ?)", (config_hash, delay, time.time(), fail, source))
     conn.commit()
     conn.close()
 
@@ -236,8 +212,7 @@ def delete_config(config_hash):
 def increment_fail_count(config_hash):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("UPDATE tested_configs SET fail_count = fail_count + 1, last_test_time = ? WHERE config_hash=?",
-              (time.time(), config_hash))
+    c.execute("UPDATE tested_configs SET fail_count = fail_count + 1, last_test_time = ? WHERE config_hash=?", (time.time(), config_hash))
     conn.commit()
     conn.close()
 
@@ -253,59 +228,48 @@ def get_cached_configs(source):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("SELECT config_hash, real_delay FROM tested_configs WHERE source=? ORDER BY real_delay ASC", (source,))
-    results = c.fetchall()
+    res = c.fetchall()
     conn.close()
-    return results
+    return res
 
 def get_expired_configs(limit, source):
     cutoff = time.time() - EXPIRY_HOURS * 3600
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute('''SELECT config_hash, last_test_time, fail_count FROM tested_configs 
-                 WHERE last_test_time < ? AND source=? ORDER BY last_test_time ASC LIMIT ?''',
-              (cutoff, source, limit))
+    c.execute("SELECT config_hash, last_test_time, fail_count FROM tested_configs WHERE last_test_time < ? AND source=? ORDER BY last_test_time ASC LIMIT ?", (cutoff, source, limit))
     rows = c.fetchall()
     conn.close()
     return rows
 
-# ---------------- استخراج کانفیگ‌ها (Telegram + Web Scraping) ----------------
+# ---------------- استخراج کانفیگ‌ها ----------------
 def extract_telegram_configs():
     configs = set()
     with client:
         for channel in CHANNELS:
             last_id = get_last_msg_id(channel)
-            new_messages = []
+            new_msgs = []
             max_id = last_id
             try:
-                messages = client.iter_messages(channel, limit=200, min_id=last_id + 1, reverse=False)
-                for msg in messages:
-                    new_messages.append(msg)
-                    if msg.id > max_id:
-                        max_id = msg.id
+                for msg in client.iter_messages(channel, limit=200, min_id=last_id + 1, reverse=False):
+                    new_msgs.append(msg)
+                    if msg.id > max_id: max_id = msg.id
             except Exception as e:
                 print(f"⚠️ خطا در تلگرام {channel}: {e}")
                 continue
-            
-            if new_messages:
-                set_last_msg_id(channel, max_id)
-            
-            for msg in new_messages:
+            if new_msgs: set_last_msg_id(channel, max_id)
+            for msg in new_msgs:
                 if msg.text:
-                    found = re.findall(r'(?:vless|vmess|trojan|ss)://\S+', msg.text)
-                    for link in found:
-                        if is_iran_friendly_config(link):
-                            configs.add(link)
+                    for link in re.findall(r'(?:vless|vmess|trojan|ss)://\S+', msg.text):
+                        if is_iran_friendly_config(link): configs.add(link)
     return list(configs)
 
 def extract_v2nodes_configs(base_url):
-    print(f"🌐 استخراج تحت وب از: {base_url}")
+    print(f"🌐 استخراج تحت وب از: {base_url} (با دور زدن Cloudflare)")
     configs = set()
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
-    }
+    scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False})
     
     try:
-        resp = requests.get(base_url, headers=headers, timeout=15)
+        resp = scraper.get(base_url, timeout=20)
         if resp.status_code != 200:
             print(f"⚠️ دریافت نشد (کد {resp.status_code})")
             return []
@@ -313,7 +277,6 @@ def extract_v2nodes_configs(base_url):
         soup = BeautifulSoup(resp.text, 'html.parser')
         detail_links = set()
         
-        # استخراج لینک‌های اختصاصی هر کانفیگ در صفحه مرجع
         for a in soup.find_all('a', href=True):
             href = a['href']
             if re.match(r'^/(?:server|node|post)s?/[\w-]+/?', href, re.IGNORECASE):
@@ -325,22 +288,19 @@ def extract_v2nodes_configs(base_url):
         
         for link in detail_links:
             try:
-                time.sleep(0.3)
-                detail_resp = requests.get(link, headers=headers, timeout=10)
+                time.sleep(1)
+                detail_resp = scraper.get(link, timeout=15)
                 if detail_resp.status_code == 200:
-                    found = re.findall(r'(?:vless|vmess|trojan|ss)://[^\s<"\'\n]+', detail_resp.text)
-                    for config in found:
-                        if is_iran_friendly_config(config):
-                            configs.add(config)
-            except Exception as e:
-                pass
+                    for config in re.findall(r'(?:vless|vmess|trojan|ss)://[^\s<"\'\n]+', detail_resp.text):
+                        if is_iran_friendly_config(config): configs.add(config)
+            except: pass
                 
     except Exception as e:
         print(f"⚠️ خطا در ارتباط: {e}")
         
     return list(configs)
 
-# ---------------- ابزار git ----------------
+# ---------------- ابزار Git ----------------
 def save_to_file(valid_configs, filename):
     content = "\n".join(valid_configs)
     encoded = base64.b64encode(content.encode("utf-8")).decode("utf-8")
@@ -350,23 +310,14 @@ def save_to_file(valid_configs, filename):
 def git_commit_all():
     subprocess.run(["git", "config", "user.name", "github-actions[bot]"], check=True)
     subprocess.run(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"], check=True)
-    
-    files_to_add = [DB_FILE] + list(CONFIG_FILES.values())
-    for f in files_to_add:
-        if os.path.exists(f):
-            subprocess.run(["git", "add", f], check=True)
-
-    result = subprocess.run(["git", "diff", "--cached", "--quiet"], capture_output=True)
-    if result.returncode == 0:
-        print("↳ بدون تغییر جدید، commit انجام نشد.")
-        return
-
-    subprocess.run(["git", "commit", "-m", "🔄 Update all configs with Real Delay test"], check=True)
+    for f in [DB_FILE] + list(CONFIG_FILES.values()):
+        if os.path.exists(f): subprocess.run(["git", "add", f], check=True)
+    if subprocess.run(["git", "diff", "--cached", "--quiet"], capture_output=True).returncode == 0: return
+    subprocess.run(["git", "commit", "-m", "🔄 Update configs"], check=True)
     subprocess.run(["git", "pull", "--rebase", "origin", "main"], check=True)
     subprocess.run(["git", "push", "origin", "main"], check=True)
-    print("↳ تغییرات با موفقیت در مخزن ثبت شد.")
 
-# ---------------- توابع تست Xray ----------------
+# ---------------- تست Xray (فقط برای تلگرام) ----------------
 def download_xray():
     url = "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip"
     resp = requests.get(url, stream=True, timeout=30)
@@ -385,248 +336,118 @@ def parse_link_to_outbound(link):
             b64 = link[8:]
             padded = b64 + '=' * (4 - len(b64) % 4) if len(b64) % 4 != 0 else b64
             decoded = json.loads(base64.b64decode(padded).decode('utf-8'))
-            out = {
-                "protocol": "vmess",
-                "settings": {"vnext": [{
-                    "address": decoded["add"],
-                    "port": int(decoded["port"]),
-                    "users": [{"id": decoded["id"], "security": decoded.get("scy", "auto")}]
-                }]},
-                "streamSettings": {"network": decoded.get("net", "tcp")}
-            }
-            if decoded.get("net") == "ws":
-                out["streamSettings"]["wsSettings"] = {
-                    "path": decoded.get("path", "/"),
-                    "headers": {"Host": decoded.get("host", decoded["add"])} if decoded.get("host") else {}
-                }
-            if decoded.get("tls") == "tls":
-                out["streamSettings"]["security"] = "tls"
-                out["streamSettings"]["tlsSettings"] = {"serverName": decoded.get("sni", decoded["add"])}
+            out = {"protocol": "vmess", "settings": {"vnext": [{"address": decoded["add"], "port": int(decoded["port"]), "users": [{"id": decoded["id"], "security": decoded.get("scy", "auto")}]}]}, "streamSettings": {"network": decoded.get("net", "tcp")}}
+            if decoded.get("net") == "ws": out["streamSettings"]["wsSettings"] = {"path": decoded.get("path", "/"), "headers": {"Host": decoded.get("host", decoded["add"])} if decoded.get("host") else {}}
+            if decoded.get("tls") == "tls": out["streamSettings"]["security"] = "tls"; out["streamSettings"]["tlsSettings"] = {"serverName": decoded.get("sni", decoded["add"])}
             return out
-
         elif link.startswith("ss://"):
             parsed = urlparse(link)
             userinfo = parsed.username
-            if userinfo:
-                try:
-                    padded = userinfo + '=' * (4 - len(userinfo) % 4) if len(userinfo) % 4 != 0 else userinfo
-                    decoded = base64.b64decode(padded).decode('utf-8')
-                    if ':' in decoded:
-                        method, password = decoded.split(':', 1)
-                    else:
-                        method, password = "aes-256-gcm", decoded
-                except:
-                    if ':' in userinfo:
-                        method, password = userinfo.split(':', 1)
-                    else:
-                        method, password = "aes-256-gcm", userinfo
-            else:
-                return None
-            outbound = {
-                "protocol": "shadowsocks",
-                "settings": {"servers": [{"address": parsed.hostname, "port": int(parsed.port), "method": method, "password": password}]},
-                "streamSettings": {"network": "tcp", "security": "none"}
-            }
-            return outbound
-
+            if not userinfo: return None
+            try:
+                padded = userinfo + '=' * (4 - len(userinfo) % 4) if len(userinfo) % 4 != 0 else userinfo
+                decoded = base64.b64decode(padded).decode('utf-8')
+                method, password = decoded.split(':', 1) if ':' in decoded else ("aes-256-gcm", decoded)
+            except:
+                method, password = userinfo.split(':', 1) if ':' in userinfo else ("aes-256-gcm", userinfo)
+            return {"protocol": "shadowsocks", "settings": {"servers": [{"address": parsed.hostname, "port": int(parsed.port), "method": method, "password": password}]}, "streamSettings": {"network": "tcp", "security": "none"}}
         elif link.startswith("vless://") or link.startswith("trojan://"):
             parsed = urlparse(link)
             if link.startswith("vless://"):
-                protocol = "vless"
-                settings = {"vnext": [{"address": parsed.hostname, "port": parsed.port, "users": [{"id": parsed.username, "encryption": "none", "flow": ""}]}]}
+                protocol, settings = "vless", {"vnext": [{"address": parsed.hostname, "port": parsed.port, "users": [{"id": parsed.username, "encryption": "none", "flow": ""}]}]}
             else:
-                protocol = "trojan"
-                settings = {"servers": [{"address": parsed.hostname, "port": parsed.port, "password": parsed.username}]}
-
+                protocol, settings = "trojan", {"servers": [{"address": parsed.hostname, "port": parsed.port, "password": parsed.username}]}
             params = parse_qs(parsed.query)
-            def get_param(key, default=""): return params.get(key, [default])[0]
-
-            network = get_param("type", "tcp")
-            security = get_param("security", "none")
-            
-            if protocol == "vless" and get_param("flow", ""):
-                settings["vnext"][0]["users"][0]["flow"] = get_param("flow", "")
-
-            outbound = {
-                "protocol": protocol, "settings": settings,
-                "streamSettings": {"network": network, "security": security}
-            }
-
-            if network == "ws":
-                outbound["streamSettings"]["wsSettings"] = {"path": get_param("path", "/"), "headers": {"Host": get_param("host", "")} if get_param("host", "") else {}}
-            elif network == "tcp":
-                header_type = get_param("headerType", "none")
-                if header_type == "http":
-                    outbound["streamSettings"]["tcpSettings"] = {"header": {"type": "http", "request": {"headers": {"Host": get_param("host", "")} if get_param("host", "") else {}, "path": get_param("path", "/")}}}
-            elif network == "grpc":
-                outbound["streamSettings"]["grpcSettings"] = {"serviceName": get_param("path", "/").lstrip("/"), "multiMode": False}
-
-            if security == "tls":
-                tls_settings = {"serverName": get_param("sni", parsed.hostname), "allowInsecure": get_param("allowInsecure", "0") == "1"}
-                if get_param("fp", ""): tls_settings["fingerprint"] = get_param("fp", "")
-                if get_param("alpn", ""): tls_settings["alpn"] = get_param("alpn", "").split(",")
-                outbound["streamSettings"]["tlsSettings"] = tls_settings
-            elif security == "reality":
-                outbound["streamSettings"]["realitySettings"] = {
-                    "serverName": get_param("sni", parsed.hostname),
-                    "fingerprint": get_param("fp", "chrome"),
-                    "publicKey": get_param("pbk", ""),
-                    "shortId": get_param("sid", ""),
-                    "spiderX": get_param("spx", "")
-                }
-            return outbound
-    except Exception:
-        return None
+            get_p = lambda k, d="": params.get(k, [d])[0]
+            net, sec = get_p("type", "tcp"), get_p("security", "none")
+            if protocol == "vless" and get_p("flow"): settings["vnext"][0]["users"][0]["flow"] = get_p("flow")
+            out = {"protocol": protocol, "settings": settings, "streamSettings": {"network": net, "security": sec}}
+            if net == "ws": out["streamSettings"]["wsSettings"] = {"path": get_p("path", "/"), "headers": {"Host": get_p("host")} if get_p("host") else {}}
+            elif net == "tcp" and get_p("headerType") == "http": out["streamSettings"]["tcpSettings"] = {"header": {"type": "http", "request": {"headers": {"Host": get_p("host")} if get_p("host") else {}, "path": get_p("path", "/")}}}
+            elif net == "grpc": out["streamSettings"]["grpcSettings"] = {"serviceName": get_p("path", "/").lstrip("/"), "multiMode": False}
+            if sec == "tls": out["streamSettings"]["tlsSettings"] = {"serverName": get_p("sni", parsed.hostname), "allowInsecure": get_p("allowInsecure", "0") == "1", **({"fingerprint": get_p("fp")} if get_p("fp") else {}), **({"alpn": get_p("alpn").split(",")} if get_p("alpn") else {})}
+            elif sec == "reality": out["streamSettings"]["realitySettings"] = {"serverName": get_p("sni", parsed.hostname), "fingerprint": get_p("fp", "chrome"), "publicKey": get_p("pbk"), "shortId": get_p("sid"), "spiderX": get_p("spx")}
+            return out
+    except: return None
 
 def test_single_config(xray_bin, link, timeout=TEST_TIMEOUT):
-    outbound = parse_link_to_outbound(link)
-    if not outbound: return False, 999999
-
-    inbound = {"listen": "127.0.0.1", "port": 10808, "protocol": "socks", "settings": {"udp": False, "auth": "noauth"}}
-    config = {"inbounds": [inbound], "outbounds": [outbound]}
-
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-        json.dump(config, f)
-        config_path = f.name
-
-    xray_proc = None
+    out = parse_link_to_outbound(link)
+    if not out: return False, 999999
+    config_path = tempfile.mktemp(suffix=".json")
+    with open(config_path, "w") as f: json.dump({"inbounds": [{"listen": "127.0.0.1", "port": 10808, "protocol": "socks", "settings": {"udp": False, "auth": "noauth"}}], "outbounds": [out]}, f)
+    proc = None
     try:
-        xray_proc = subprocess.Popen([xray_bin, "run", "-c", config_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        proc = subprocess.Popen([xray_bin, "run", "-c", config_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         time.sleep(2.5)
-
         res = subprocess.run(["curl", "-s", "-o", "/dev/null", "-w", "%{time_total}", "--socks5-hostname", "127.0.0.1:10808", TEST_URL, "--connect-timeout", str(timeout)], capture_output=True, text=True, timeout=timeout + 5)
-        if res.returncode == 0 and res.stdout.strip():
-            latency = float(res.stdout.strip()) * 1000
-            if latency < timeout * 1000: return True, latency
+        if res.returncode == 0 and res.stdout.strip() and (latency := float(res.stdout.strip()) * 1000) < timeout * 1000: return True, latency
         return False, 999999
-    except Exception:
-        return False, 999999
+    except: return False, 999999
     finally:
-        if xray_proc:
-            xray_proc.terminate()
-            try: xray_proc.wait(timeout=3)
-            except: xray_proc.kill()
+        if proc: proc.terminate(); (proc.wait(3) if hasattr(proc, 'wait') else proc.kill())
         try: os.unlink(config_path)
         except: pass
 
 def process_source(source_name, raw_configs, xray_bin):
     results = {}
     total = len(raw_configs)
-    
     cached = get_cached_configs(source_name)
-    for config_hash, delay in cached:
-        results[config_hash] = delay
-    print(f"📊 {len(cached)} کانفیگ کش‌شده برای {source_name} یافت شد.")
-
+    for h, d in cached: results[h] = d
+    print(f"📊 {len(cached)} کش برای {source_name}")
     for i, link in enumerate(raw_configs, 1):
-        if is_config_tested(link):
-            continue
-            
-        short = link[:60] + "..."
-        ok, delay = test_single_config(xray_bin, link)
-        if ok:
-            results[link] = delay
-            save_tested_config(link, delay, source_name, fail_count=0)
-            print(f"[{i}/{total}] ✅ {short} → {delay:.0f}ms")
-        else:
-            print(f"[{i}/{total}] ❌ {short} → ناموفق")
-
-    expired = get_expired_configs(MAX_RETEST, source_name)
-    if expired:
-        print(f"\n🔁 بازبینی {len(expired)} کانفیگ قدیمی برای {source_name}...")
-        for config_hash, last_time, fail_count in expired:
-            ok, delay = test_single_config(xray_bin, config_hash)
-            if ok:
-                save_tested_config(config_hash, delay, source_name, fail_count=0)
-                results[config_hash] = delay
-            else:
-                increment_fail_count(config_hash)
-                if get_fail_count(config_hash) >= MAX_FAILURES:
-                    delete_config(config_hash)
-                    if config_hash in results: del results[config_hash]
-
-    sorted_links = [link for link, _ in sorted(results.items(), key=lambda x: x[1])]
-    return sorted_links
+        if is_config_tested(link): continue
+        ok, d = test_single_config(xray_bin, link)
+        if ok: results[link] = d; save_tested_config(link, d, source_name); print(f"[{i}/{total}] ✅ {link[:50]}... -> {d:.0f}ms")
+        else: print(f"[{i}/{total}] ❌ {link[:50]}...")
+    if expired := get_expired_configs(MAX_RETEST, source_name):
+        for h, _, _ in expired:
+            ok, d = test_single_config(xray_bin, h)
+            if ok: results[h] = d; save_tested_config(h, d, source_name)
+            elif (increment_fail_count(h) or True) and get_fail_count(h) >= MAX_FAILURES: delete_config(h); results.pop(h, None)
+    return [l for l, _ in sorted(results.items(), key=lambda x: x[1])]
 
 def perform_purge():
-    print("🧹 شروع پالایش کامل کانفیگ‌های موجود...")
+    print("🧹 شروع پالایش...")
     xray_bin = download_xray()
-    
-    for source_id, filename in CONFIG_FILES.items():
-        if not os.path.exists(filename): continue
+    for sid, fn in CONFIG_FILES.items():
+        # پالایش (تست مجدد فایل‌های ذخیره شده) فقط برای کانفیگ‌های تلگرام انجام شود
+        if sid != "telegram": continue
         
-        with open(filename, "r", encoding="utf-8") as f:
-            encoded = f.read().strip()
-        if not encoded: continue
-            
+        if not os.path.exists(fn): continue
         try:
-            decoded = base64.b64decode(encoded).decode("utf-8")
-            links = list(set([line.strip() for line in decoded.split("\n") if line.strip()]))
-        except: continue
-        
-        results = {}
-        for link in links:
-            ok, delay = test_single_config(xray_bin, link)
-            if ok:
-                results[link] = delay
-                save_tested_config(link, delay, source_id, fail_count=0)
-            else:
-                delete_config(link)
-                
-        sorted_links = [link for link, _ in sorted(results.items(), key=lambda x: x[1])]
-        save_to_file(sorted_links, filename)
-        print(f"🧹 پالایش {source_id} پایان یافت. ({len(sorted_links)} معتبر)")
+            links = set(base64.b64decode(open(fn).read().strip()).decode().split())
+            results = {}
+            for l in links:
+                if (ok_d := test_single_config(xray_bin, l))[0]: results[l] = ok_d[1]; save_tested_config(l, ok_d[1], sid)
+                else: delete_config(l)
+            save_to_file([l for l, _ in sorted(results.items(), key=lambda x: x[1])], fn)
+        except: pass
+    git_commit_all(); set_run_counter(0); shutil.rmtree(os.path.dirname(xray_bin), ignore_errors=True)
 
-    git_commit_all()
-    set_run_counter(0)
-    shutil.rmtree(os.path.dirname(xray_bin), ignore_errors=True)
-
-# ---------------- اجرای اصلی برنامه ----------------
 if __name__ == "__main__":
-    init_db()
-    clean_database_with_heuristics()
-    init_fetch_state()
-    init_run_counter()
-
-    counter = get_run_counter()
-    if counter >= PURGE_INTERVAL:
-        perform_purge()
-        exit(0)
-
-    print("📥 دانلود Xray-core...")
+    init_db(); clean_database_with_heuristics(); init_fetch_state(); init_run_counter()
+    if (counter := get_run_counter()) >= PURGE_INTERVAL: perform_purge(); exit(0)
     xray_bin = download_xray()
     
-    # لیست سورس‌ها و آدرس‌های مربوطه به روزرسانی شد
-    sources_to_scrape = [
-        ("telegram", None),
-        ("v2nodes_us", "https://www.v2nodes.com/country/us/"),
+    sources = [
+        ("telegram", None), 
+        ("v2nodes_us", "https://www.v2nodes.com/country/us/"), 
         ("v2nodes_in", "https://www.v2nodes.com/country/in/")
     ]
-
-    for source_id, url in sources_to_scrape:
-        print(f"\n{'='*40}\n🚀 پردازش منبع: {source_id}\n{'='*40}")
-        
-        if source_id == "telegram":
-            raw_configs = extract_telegram_configs()
-        else:
-            raw_configs = extract_v2nodes_configs(url)
-            
-        if not raw_configs:
-            print(f"⚠️ هیچ کانفیگ سالمی از {source_id} پیدا نشد.")
-            continue
-            
-        if len(raw_configs) > MAX_TEST:
-            raw_configs = raw_configs[:MAX_TEST]
-            
-        valid_configs = process_source(source_id, raw_configs, xray_bin)
-        
-        target_file = CONFIG_FILES[source_id]
-        save_to_file(valid_configs, target_file)
-        print(f"📦 فایل {target_file} با {len(valid_configs)} کانفیگ ذخیره شد.")
-
-    print("\n🔄 ثبت تغییرات در گیت...")
-    git_commit_all()
     
-    set_run_counter(counter + 1)
-    shutil.rmtree(os.path.dirname(xray_bin), ignore_errors=True)
-    print("✅ پردازش تمام شد.")
+    for sid, url in sources:
+        print(f"\n🚀 پردازش: {sid}")
+        if sid == "telegram":
+            raw = extract_telegram_configs()
+            if not raw: print("⚠️ هیچ کانفیگ سالمی یافت نشد."); continue
+            valid = process_source(sid, raw[:MAX_TEST], xray_bin)
+            save_to_file(valid, CONFIG_FILES[sid])
+        else:
+            raw = extract_v2nodes_configs(url)
+            if not raw: print("⚠️ هیچ کانفیگ سالمی یافت نشد."); continue
+            # برای سایت v2nodes نیازی به تست پینگ نیست؛ مستقیم به لیست اضافه و ذخیره می‌شوند
+            valid = list(set(raw)) # حذف کانفیگ‌های تکراری
+            save_to_file(valid, CONFIG_FILES[sid])
+            print(f"📦 فایل {CONFIG_FILES[sid]} با {len(valid)} کانفیگ (بدون تست) ذخیره شد.")
+        
+    git_commit_all(); set_run_counter(counter + 1); shutil.rmtree(os.path.dirname(xray_bin), ignore_errors=True)
