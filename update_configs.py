@@ -714,7 +714,7 @@ if __name__ == "__main__":
     if not raw:
         print("⚠️ هیچ کانفیگ سالمی پیدا نشد!")
         set_run_counter(counter + 1)
-        exit(1)
+        exit(0)
 
     if len(raw) > MAX_TEST:
         raw = raw[:MAX_TEST]
