@@ -2,7 +2,7 @@ name: Update V2Ray Configs
 
 on:
   schedule:
-    - cron: '0 */6 * * *'
+    - cron: '0 */3 * * *'
   workflow_dispatch:
 
 permissions:
@@ -26,25 +26,22 @@ jobs:
         run: |
           pip install telethon requests
 
-      - name: Run Telegram Strict Script
+      - name: Run script
         env:
           API_ID: ${{ secrets.API_ID }}
           API_HASH: ${{ secrets.API_HASH }}
           SESSION_STRING: ${{ secrets.SESSION_STRING }}
         run: python update_configs.py
 
-      - name: Run Mixed Iran GeoIP Script
-        run: python update_configs2.py
-
       - name: Commit and push changes
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add configs.txt tested_configs.db tested_mixed.txt mixed_configs.db || true
+          git add configs.txt tested_configs.db
           if git diff --cached --quiet; then
             echo "No changes to commit"
           else
-            git commit -m "🔄 Auto-update Telegram and Mixed lists"
+            git commit -m "🔄 Update configs with Real Delay test"
             git pull --rebase origin main
             git push origin main
           fi
